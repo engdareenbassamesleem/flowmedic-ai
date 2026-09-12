@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
@@ -60,6 +61,15 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
 
     app = FastAPI(title="FlowMedic AI", version="0.1.0", lifespan=lifespan)
     app.state.settings = config
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            origin.strip() for origin in config.cors_allow_origins.split(",") if origin.strip()
+        ],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     @app.middleware("http")
     async def authentication(request: Request, call_next):

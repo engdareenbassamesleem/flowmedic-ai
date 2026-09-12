@@ -75,6 +75,26 @@ def test_missing_configuration():
         assert response.json()["error"]["code"] == "n8n_not_configured"
 
 
+def test_system_status_and_frontend_cors():
+    settings = Settings(_env_file=None, database_url="sqlite:///:memory:")
+    with TestClient(create_app(settings)) as c:
+        response = c.get("/api/v1/system/status")
+        assert response.json() == {
+            "n8n_configured": False,
+            "ai_mode": "mock",
+            "database_engine": "sqlite",
+        }
+        preflight = c.options(
+            "/api/v1/incidents",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
 def test_bearer_authentication():
     settings = Settings(
         _env_file=None, database_url="sqlite:///:memory:", flowmedic_api_key="local"

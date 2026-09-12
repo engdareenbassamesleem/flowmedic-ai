@@ -4,6 +4,75 @@ FlowMedic turns failed n8n workflow executions into persistent incidents and str
 uncertainty-aware diagnosis suggestions. Phase 1 is a backend MVP for one trusted n8n
 instance. It does not modify workflows or apply fixes.
 
+## Phase 2 dashboard
+
+`frontend/` is a responsive Next.js 16 + TypeScript + Tailwind dashboard for engineering
+teams investigating automation failures. It consumes the FastAPI API directly and makes
+missing data explicit: it never invents workflow execution status, history, or incident
+counts that Phase 1 does not expose.
+
+| Dashboard page | Existing API used |
+|---|---|
+| Overview | `GET /health`, `GET /api/v1/system/status`, `GET /api/v1/workflows`, `GET /api/v1/incidents` |
+| Workflows | `GET /api/v1/workflows` |
+| Incidents | `GET /api/v1/incidents?limit=&offset=` |
+| Incident detail | `GET /api/v1/incidents/{id}`, `POST /api/v1/incidents/{id}/diagnose` |
+| Settings | `GET /health`, `GET /api/v1/system/status`, `GET /api/v1/n8n/status` |
+
+The small `GET /api/v1/system/status` endpoint exposes only safe configuration state:
+n8n configured/not configured, mock/configured AI mode, and database engine. It never
+returns keys, URLs with credentials, or connection strings. CORS permits the local dashboard
+origins listed in `CORS_ALLOW_ORIGINS`.
+
+### Dashboard setup
+
+```bash
+# Terminal 1 — backend
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
+
+# Terminal 2 — dashboard
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:3000`. The dashboard defaults to
+`http://127.0.0.1:8000`; change `NEXT_PUBLIC_API_BASE_URL` in
+`frontend/.env.local` for another API address. This variable is public browser configuration,
+so it must never contain a token or secret.
+
+```bash
+# Dashboard checks
+cd frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+For the credentials-free portfolio demo, run the backend with `DEMO_MODE=true` before
+starting the dashboard. It displays one clearly synthetic incident and mock diagnosis.
+
+### Architecture
+
+```text
+frontend/
+  app/             Next.js App Router pages
+  components/      Dashboard UI and accessible shared states
+  lib/             Typed FastAPI client, response types, formatting, query hook
+  tests/           API, action, and empty-state tests
+app/               Existing FastAPI backend
+```
+
+### Screenshots
+
+Add dashboard screenshots here after a deployed demo is available:
+
+- `docs/screenshots/overview.png`
+- `docs/screenshots/incidents.png`
+- `docs/screenshots/incident-detail.png`
+
 ## Public demo mode
 
 The highest-value Phase 2 increment is a credentials-free, reproducible API demo. It seeds
@@ -105,6 +174,8 @@ When auth is enabled, docs and OpenAPI also require the bearer header.
 | `AI_MODEL` | `gpt-4.1-mini` | Configurable model supporting strict JSON schema output |
 | `FLOWMEDIC_API_KEY` | empty | Optional bearer token for all routes except `/health` |
 | `DEMO_MODE` | `false` | Seed one synthetic diagnosed incident and enable `/api/v1/demo`; cannot be combined with n8n or AI keys |
+| `CORS_ALLOW_ORIGINS` | local dashboard origins | Comma-separated browser origins permitted to call the API |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only setting in `frontend/.env.local`; FastAPI address without secrets |
 
 No credentials are required for offline tests or mock diagnosis. A configured live
 provider error is reported; it never silently falls back to a mock answer.
@@ -155,7 +226,8 @@ docker compose up --build
 ```
 
 Compose binds only to localhost and persists SQLite in a named volume. The image runs
-as a non-root user. Inside a container, `localhost` refers to that container, not the host.
+as a non-root user. It starts the API at `http://127.0.0.1:8000` and dashboard at
+`http://127.0.0.1:3000`. Inside a container, `localhost` refers to that container, not the host.
 
 ## Checks
 

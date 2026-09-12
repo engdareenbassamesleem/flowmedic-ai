@@ -66,6 +66,12 @@ class DemoInfo(BaseModel):
     note: str
 
 
+class SystemStatus(BaseModel):
+    n8n_configured: bool
+    ai_mode: Literal["mock", "configured"]
+    database_engine: str
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str

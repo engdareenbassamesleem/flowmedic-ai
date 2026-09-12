@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     flowmedic_api_key: SecretStr = SecretStr("")
     demo_mode: bool = False
+    cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod

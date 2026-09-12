@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 from app.schemas.domain import Failure
 
-
 DEMO_EXECUTION_ID = "demo-execution-auth-401"
 
 

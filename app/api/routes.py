@@ -14,6 +14,7 @@ from app.schemas.domain import (
     IncidentOut,
     IncidentPage,
     SyncResult,
+    SystemStatus,
     Workflow,
     WorkflowPage,
 )
@@ -47,6 +48,17 @@ def secrets(request):
 @router.get("/n8n/status")
 async def n8n_status(request: Request) -> dict[str, bool]:
     return await request.app.state.n8n.connectivity()
+
+
+@router.get("/system/status", response_model=SystemStatus)
+def system_status(request: Request) -> SystemStatus:
+    config = request.app.state.settings
+    database_engine = config.database_url.split(":", 1)[0].lower()
+    return SystemStatus(
+        n8n_configured=bool(config.n8n_base_url and config.n8n_api_key.get_secret_value()),
+        ai_mode="configured" if config.ai_api_key.get_secret_value() else "mock",
+        database_engine=database_engine,
+    )
 
 
 @router.get("/workflows", response_model=WorkflowPage)
