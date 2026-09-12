@@ -4,7 +4,10 @@ import type {
   Incident,
   IncidentPage,
   N8nConnectionResponse,
+  MonitoringStatus,
+  OverviewMetrics,
   SystemStatus,
+  WorkflowHealthPage,
   WorkflowPage,
 } from "@/lib/types";
 
@@ -49,6 +52,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthResponse>("/health"),
   systemStatus: () => request<SystemStatus>("/api/v1/system/status"),
+  monitoringStatus: () => request<MonitoringStatus>("/api/v1/monitoring/status"),
+  monitoringSync: () => request("/api/v1/monitoring/sync", { method: "POST" }),
+  overviewMetrics: () => request<OverviewMetrics>("/api/v1/metrics/overview"),
+  workflowMetrics: () => request<WorkflowHealthPage>("/api/v1/metrics/workflows"),
   n8nStatus: () => request<N8nConnectionResponse>("/api/v1/n8n/status"),
   workflows: (limit = 50, cursor?: string) => {
     const params = new URLSearchParams({ limit: String(limit) });

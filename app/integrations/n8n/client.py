@@ -14,6 +14,7 @@ class Execution(BaseModel):
     workflowId: str
     status: str | None = None
     startedAt: datetime | None = None
+    stoppedAt: datetime | None = None
     data: dict | None = None
     workflowData: dict | None = None
 
@@ -67,7 +68,15 @@ class N8nClient:
             raise ServiceError("n8n_timeout", "n8n request timed out", 504) from None
         except httpx.RequestError:
             raise ServiceError("n8n_unreachable", "Unable to reach n8n", 503) from None
-        except httpx.HTTPStatusError:
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise ServiceError(
+                    "n8n_rate_limited", "n8n rate limited the request", 503
+                ) from None
+            if exc.response.status_code >= 500:
+                raise ServiceError(
+                    "n8n_server_error", "n8n service is temporarily unavailable", 503
+                ) from None
             raise ServiceError("n8n_http_error", "n8n returned an unsuccessful response") from None
         except (ValueError, ValidationError):
             raise ServiceError("n8n_malformed", "n8n returned an invalid response") from None

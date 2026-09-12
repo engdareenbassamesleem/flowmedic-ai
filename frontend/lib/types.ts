@@ -55,6 +55,51 @@ export interface SystemStatus {
   database_engine: string;
 }
 
+export type MonitoringState = "disabled" | "idle" | "running" | "degraded";
+export type WorkflowHealthState = "unknown" | "healthy" | "degraded" | "unhealthy";
+
+export interface MonitoringStatus {
+  enabled: boolean;
+  state: MonitoringState;
+  poll_interval_seconds: number;
+  last_checked_at: string | null;
+  last_successful_sync_at: string | null;
+  last_error_at: string | null;
+  last_error_summary: string | null;
+  consecutive_failure_count: number;
+}
+
+export interface WorkflowHealth {
+  workflow_id: string;
+  workflow_name: string;
+  health: WorkflowHealthState;
+  last_checked_at: string | null;
+  last_successful_execution_at: string | null;
+  last_failed_execution_at: string | null;
+  recent_executions_count: number;
+  recent_success_count: number;
+  recent_failure_count: number;
+  success_rate: number | null;
+  open_incident_count: number;
+}
+
+export interface WorkflowHealthPage {
+  data: WorkflowHealth[];
+}
+
+export interface OverviewMetrics {
+  monitored_workflow_count: number;
+  healthy_workflow_count: number;
+  degraded_workflow_count: number;
+  unhealthy_workflow_count: number;
+  unknown_workflow_count: number;
+  open_incident_count: number;
+  recent_failure_count: number;
+  recent_success_count: number;
+  last_successful_monitoring_sync_at: string | null;
+  monitoring: MonitoringStatus;
+}
+
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }

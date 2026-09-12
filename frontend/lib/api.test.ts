@@ -21,4 +21,16 @@ describe("FlowMedic API client", () => {
       message: "n8n is not configured",
     });
   });
+
+  it("loads typed persisted monitoring metrics", async () => {
+    const body = { monitored_workflow_count: 0, monitoring: { state: "disabled" } };
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+    await expect(api.overviewMetrics()).resolves.toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/v1/metrics/overview",
+      expect.anything(),
+    );
+  });
 });

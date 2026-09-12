@@ -72,6 +72,60 @@ class SystemStatus(BaseModel):
     database_engine: str
 
 
+MonitoringState = Literal["disabled", "idle", "running", "degraded"]
+WorkflowHealthState = Literal["unknown", "healthy", "degraded", "unhealthy"]
+
+
+class MonitoringStatus(BaseModel):
+    enabled: bool
+    state: MonitoringState
+    poll_interval_seconds: float
+    last_checked_at: datetime | None = None
+    last_successful_sync_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_summary: str | None = None
+    consecutive_failure_count: int = 0
+
+
+class MonitoringSyncResult(BaseModel):
+    status: Literal["completed", "skipped", "disabled", "failed"]
+    executions_discovered: int = 0
+    history_records_created: int = 0
+    incidents_created: int = 0
+    next_cursor: str | None = None
+
+
+class WorkflowHealth(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    health: WorkflowHealthState
+    last_checked_at: datetime | None = None
+    last_successful_execution_at: datetime | None = None
+    last_failed_execution_at: datetime | None = None
+    recent_executions_count: int = 0
+    recent_success_count: int = 0
+    recent_failure_count: int = 0
+    success_rate: float | None = None
+    open_incident_count: int = 0
+
+
+class WorkflowHealthPage(BaseModel):
+    data: list[WorkflowHealth]
+
+
+class OverviewMetrics(BaseModel):
+    monitored_workflow_count: int = 0
+    healthy_workflow_count: int = 0
+    degraded_workflow_count: int = 0
+    unhealthy_workflow_count: int = 0
+    unknown_workflow_count: int = 0
+    open_incident_count: int = 0
+    recent_failure_count: int = 0
+    recent_success_count: int = 0
+    last_successful_monitoring_sync_at: datetime | None = None
+    monitoring: MonitoringStatus
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str

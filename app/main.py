@@ -13,11 +13,13 @@ from app.api.routes import router
 from app.core.config import Settings
 from app.core.database import create_database
 from app.core.errors import ServiceError
-from app.demo import demo_failure
+from app.core.migrations import upgrade_database
+from app.demo import demo_failure, seed_demo_history
 from app.integrations.n8n.client import N8nClient
 from app.models.incident import Base
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import ErrorResponse
+from app.services.monitoring import MonitoringService
 
 
 def error_response(code, message, status_code):
@@ -29,10 +31,16 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
 
     @asynccontextmanager
     async def lifespan(app):
-        engine, factory = create_database(config.database_url)
-        app.state.session_factory = factory
-        try:
+        if ":memory:" in config.database_url:
+            # Isolated test databases do not share connections with Alembic's migration engine.
+            engine, factory = create_database(config.database_url)
             Base.metadata.create_all(engine)
+        else:
+            upgrade_database(config.database_url)
+            engine, factory = create_database(config.database_url)
+        app.state.session_factory = factory
+        app.state.monitoring = None
+        try:
             async with (
                 httpx.AsyncClient(transport=n8n_transport, follow_redirects=False) as n8n_http,
                 httpx.AsyncClient(transport=ai_transport, follow_redirects=False) as ai_http,
@@ -55,8 +63,14 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
                             incident.status = "diagnosed"
                         session.commit()
                         app.state.demo_incident_id = incident.id
+                        seed_demo_history(session, incident.id)
+                        session.commit()
+                app.state.monitoring = MonitoringService(config, factory, app.state.n8n)
+                await app.state.monitoring.start()
                 yield
         finally:
+            if app.state.monitoring is not None:
+                await app.state.monitoring.stop()
             engine.dispose()
 
     app = FastAPI(title="FlowMedic AI", version="0.1.0", lifespan=lifespan)

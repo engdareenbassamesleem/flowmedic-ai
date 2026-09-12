@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     flowmedic_api_key: SecretStr = SecretStr("")
     demo_mode: bool = False
     cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    monitor_poll_interval_seconds: float = Field(default=60, ge=10, le=3600)
+    monitor_page_size: int = Field(default=50, ge=1, le=100)
+    monitor_max_retries: int = Field(default=3, ge=0, le=5)
+    monitor_retry_base_seconds: float = Field(default=2, gt=0, le=60)
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod

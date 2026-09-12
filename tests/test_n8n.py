@@ -48,7 +48,8 @@ def test_legacy_failure_requires_error():
     [
         (401, {}, "n8n_auth_failed"),
         (403, {}, "n8n_auth_failed"),
-        (500, {}, "n8n_http_error"),
+        (429, {}, "n8n_rate_limited"),
+        (500, {}, "n8n_server_error"),
         (200, {"data": "wrong"}, "n8n_malformed"),
         (200, {"unexpected": []}, "n8n_malformed"),
         (302, {}, "n8n_http_error"),

@@ -27,6 +27,10 @@ and when—is scattered across workflow and execution data.
 - Normalizes failures into a small, sanitized incident record; repeated syncs do not create
   duplicate incidents for the same execution.
 - Persists incidents and their latest diagnosis in SQLite through SQLAlchemy.
+- Runs a durable, read-only monitoring loop when n8n credentials are configured. It stores
+  lightweight execution history and an opaque n8n pagination checkpoint.
+- Derives deterministic workflow health and global metrics from persisted history—not from an
+  LLM—and exposes unavailable data as unknown rather than guessing.
 - Generates typed, uncertainty-aware diagnosis suggestions using either a deterministic mock
   provider or an OpenAI-compatible structured-output provider.
 - Provides a responsive Next.js dashboard for overview, workflows, incidents, incident
@@ -47,10 +51,13 @@ Add verified captures after running or deploying the dashboard; see
 ```mermaid
 flowchart TB
     n8n["n8n API (read-only)"] --> integration["FastAPI n8n integration"]
-    integration --> normalize["Failure normalization and sanitization"]
-    normalize --> repository["Incident repository"]
-    repository --> database[("SQLite via SQLAlchemy")]
-    repository --> api["Typed FastAPI API"]
+    integration --> monitor["Durable monitoring service"]
+    monitor --> normalize["Failure normalization and sanitization"]
+    normalize --> repository["Incident and history repositories"]
+    repository --> database[("SQLite + Alembic migrations")]
+    database --> metrics["Deterministic health metrics"]
+    monitor --> api["Typed FastAPI API"]
+    metrics --> api
     api --> provider["Diagnosis provider abstraction"]
     provider --> mock["Deterministic mock provider"]
     provider --> live["OpenAI-compatible structured-output provider"]
@@ -66,6 +73,7 @@ app/
   integrations/n8n/    Read-only n8n client and upstream schemas
   services/            Failure normalization
   repositories/        Incident persistence and idempotency
+  services/monitoring  Polling, retry/backoff, health classification
   ai/                  Diagnosis provider interface and adapters
   schemas/             Public Pydantic response models
   core/                Settings, database, sanitization, and safe errors
@@ -80,7 +88,7 @@ tests/                 Offline backend and API tests
 
 | Area | Technologies |
 |---|---|
-| Backend | Python, FastAPI, Pydantic, SQLAlchemy, SQLite, httpx |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy, SQLite, Alembic, httpx |
 | Frontend | Next.js, React, TypeScript, Tailwind CSS |
 | AI | Provider abstraction, OpenAI-compatible structured-output adapter, deterministic mock provider |
 | Quality | pytest, Ruff, Vitest, ESLint, TypeScript |
@@ -91,7 +99,15 @@ tests/                 Offline backend and API tests
 - **Read-only n8n integration:** the client issues API reads only; FlowMedic has no workflow
   write or repair capability.
 - **Idempotent ingestion:** incidents are keyed by execution ID, and the repository handles
-  duplicate-insert races safely.
+  duplicate-insert races safely. Execution history has its own source + execution-ID uniqueness
+  constraint.
+- **Opaque durable checkpoints:** the n8n cursor is stored and replayed without assuming that
+  execution identifiers are numeric or ordered. When a page has no continuation cursor, the
+  monitor returns to the newest page; database uniqueness makes that safe.
+- **Single-process polling guard:** one FastAPI lifespan task owns polling, and an async lock
+  skips overlapping manual or scheduled syncs.
+- **Bounded recovery:** timeouts, connectivity failures, rate limits, and n8n 5xx responses
+  receive bounded exponential retries; authentication and configuration errors do not.
 - **Sanitized failure context:** the normalizer deliberately excludes execution `runData`, node
   inputs/outputs, credentials, and the raw upstream error object.
 - **Typed public API:** FastAPI response models define workflow, failure, incident, diagnosis,
@@ -112,7 +128,8 @@ tests/                 Offline backend and API tests
 - Sensitive values are sanitized before failure context is persisted or passed to a diagnosis
   provider.
 - Demo mode contains one fixed synthetic incident and mock diagnosis only; it never contacts
-  n8n or a live AI provider.
+  n8n or a live AI provider. It also seeds a clearly synthetic healthy, degraded, and unhealthy
+  workflow history for the dashboard.
 - Offline tests and CI use mocked n8n/AI HTTP interactions, so real credentials are not
   required.
 
@@ -160,6 +177,10 @@ backend address. It is browser-visible configuration and must not contain a toke
 | `FLOWMEDIC_API_KEY` | empty | Optional bearer token for routes other than `/health` |
 | `DEMO_MODE` | `false` | Enables the synthetic, credentials-free demo; cannot be combined with n8n or AI keys |
 | `CORS_ALLOW_ORIGINS` | local dashboard origins | Comma-separated frontend origins permitted by FastAPI |
+| `MONITOR_POLL_INTERVAL_SECONDS` | `60` | Read-only polling cadence; 10–3600 seconds |
+| `MONITOR_PAGE_SIZE` | `50` | n8n execution page size; 1–100 |
+| `MONITOR_MAX_RETRIES` | `3` | Maximum transient retry attempts per poll |
+| `MONITOR_RETRY_BASE_SECONDS` | `2` | Initial exponential-backoff delay |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only API base URL in `frontend/.env.local` |
 
 Without n8n credentials, local health and incident endpoints still work; n8n operations return
@@ -168,7 +189,8 @@ a safe configuration error.
 ## Demo mode
 
 Demo mode makes the full dashboard flow inspectable without n8n or AI credentials. It seeds
-one persistent, clearly synthetic workflow failure and uses the deterministic mock provider.
+one persistent, clearly synthetic workflow failure, a deterministic mock diagnosis, and small
+synthetic execution histories that exercise healthy, degraded, and unhealthy dashboard states.
 
 ```bash
 DEMO_MODE=true DATABASE_URL=sqlite:///./flowmedic-demo.db \
@@ -187,6 +209,11 @@ bearer authentication is disabled.
 | `GET` | `/health` | Local process liveness; does not probe n8n |
 | `GET` | `/api/v1/system/status` | Safe configuration state only |
 | `GET` | `/api/v1/n8n/status` | Check n8n read access |
+| `GET` | `/api/v1/monitoring/status` | Safe polling state and durable checkpoint summary |
+| `POST` | `/api/v1/monitoring/sync` | Run one idempotent read-only monitoring page |
+| `GET` | `/api/v1/metrics/overview` | Persisted global workflow-health metrics |
+| `GET` | `/api/v1/metrics/workflows` | Persisted health metrics for monitored workflows |
+| `GET` | `/api/v1/workflows/{workflow_id}/health` | One workflow's deterministic health state |
 | `GET` | `/api/v1/workflows` | Sanitized workflow summaries with cursor pagination |
 | `GET` | `/api/v1/executions/failed` | Normalized failures from a recent execution page |
 | `POST` | `/api/v1/incidents/sync` | Explicitly ingest failures into persistent incidents |
@@ -195,8 +222,22 @@ bearer authentication is disabled.
 | `POST` | `/api/v1/incidents/{incident_id}/diagnose` | Generate and persist an advisory diagnosis |
 | `GET` | `/api/v1/demo` | Synthetic demo metadata; available only with `DEMO_MODE=true` |
 
-`GET` endpoints do not ingest incidents. Error responses use the safe shape
+`GET` endpoints do not ingest incidents. The monitoring `POST` is read-only toward n8n and
+uses the same idempotent service as the background loop. Error responses use the safe shape
 `{"error":{"code":"...","message":"..."}}`.
+
+### Health rules
+
+Health uses each workflow's latest 20 persisted execution records:
+
+- **Unknown:** no classified success/failure history is available.
+- **Healthy:** classified executions contain no failures and no open incidents.
+- **Degraded:** a recent failure or open incident exists, but the unhealthy rules do not.
+- **Unhealthy:** two or more recent failures, a failure with no recent success, or two or more
+  open incidents exist.
+
+The global success/failure counts use the latest 100 persisted records. These are deterministic
+rules and not AI-generated judgments.
 
 ## Docker Compose
 
@@ -213,6 +254,7 @@ dashboard at `http://127.0.0.1:3000`.
 
 ```bash
 # Backend
+alembic upgrade head
 python -m pytest -q
 python -m ruff check .
 python -m ruff format --check .
@@ -226,7 +268,8 @@ npm run build
 ```
 
 The GitHub Actions workflow is named **FlowMedic checks** and contains `backend`, `frontend`,
-and `docker` jobs. It runs on push and pull request.
+and `docker` jobs. The backend job validates `alembic upgrade head` before tests. It runs on
+push and pull request.
 
 ## Roadmap
 
@@ -236,13 +279,14 @@ and `docker` jobs. It runs on push and pull request.
 - Incident persistence with idempotent ingestion
 - AI diagnosis provider abstraction and deterministic demo mode
 - SaaS-style Next.js dashboard
+- Durable monitoring, checkpoints, retry/backoff, and execution history
+- Deterministic workflow health and monitoring metrics
 
 **Next**
 
-- Durable monitoring/polling
-- Historical workflow-health metrics
-- Retry/backoff handling
-- Durable checkpoints
+- Alerting and notification delivery
+- Deeper diagnosis evaluation
+- Audit history
 
 **Later**
 

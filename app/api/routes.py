@@ -2,10 +2,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ServiceError
 from app.core.security import sanitize
+from app.models.incident import ExecutionHistory, Incident
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import (
     DemoInfo,
@@ -13,11 +15,17 @@ from app.schemas.domain import (
     FailurePage,
     IncidentOut,
     IncidentPage,
+    MonitoringStatus,
+    MonitoringSyncResult,
+    OverviewMetrics,
     SyncResult,
     SystemStatus,
     Workflow,
+    WorkflowHealth,
+    WorkflowHealthPage,
     WorkflowPage,
 )
+from app.services.health import build_workflow_health, global_recent_counts
 from app.services.incidents import normalize
 
 router = APIRouter(prefix="/api/v1")
@@ -59,6 +67,58 @@ def system_status(request: Request) -> SystemStatus:
         ai_mode="configured" if config.ai_api_key.get_secret_value() else "mock",
         database_engine=database_engine,
     )
+
+
+@router.get("/monitoring/status", response_model=MonitoringStatus)
+def monitoring_status(request: Request) -> MonitoringStatus:
+    return request.app.state.monitoring.status()
+
+
+@router.post("/monitoring/sync", response_model=MonitoringSyncResult)
+async def monitoring_sync(request: Request) -> MonitoringSyncResult:
+    return await request.app.state.monitoring.sync()
+
+
+def workflow_health_rows(session: Session) -> list[WorkflowHealth]:
+    history = session.scalars(select(ExecutionHistory)).all()
+    incidents = session.scalars(select(Incident)).all()
+    return build_workflow_health(history, incidents)
+
+
+@router.get("/metrics/overview", response_model=OverviewMetrics)
+def overview_metrics(request: Request, session: DB) -> OverviewMetrics:
+    workflows = workflow_health_rows(session)
+    successes, failures = global_recent_counts(session.scalars(select(ExecutionHistory)).all())
+    monitoring = request.app.state.monitoring.status()
+    return OverviewMetrics(
+        monitored_workflow_count=len(workflows),
+        healthy_workflow_count=sum(item.health == "healthy" for item in workflows),
+        degraded_workflow_count=sum(item.health == "degraded" for item in workflows),
+        unhealthy_workflow_count=sum(item.health == "unhealthy" for item in workflows),
+        unknown_workflow_count=sum(item.health == "unknown" for item in workflows),
+        open_incident_count=sum(
+            item.status == "open" for item in session.scalars(select(Incident)).all()
+        ),
+        recent_failure_count=failures,
+        recent_success_count=successes,
+        last_successful_monitoring_sync_at=monitoring.last_successful_sync_at,
+        monitoring=monitoring,
+    )
+
+
+@router.get("/metrics/workflows", response_model=WorkflowHealthPage)
+def workflow_metrics(session: DB) -> WorkflowHealthPage:
+    return WorkflowHealthPage(data=workflow_health_rows(session))
+
+
+@router.get("/workflows/{workflow_id}/health", response_model=WorkflowHealth)
+def workflow_health(workflow_id: str, session: DB) -> WorkflowHealth:
+    if len(workflow_id) > 255:
+        raise ServiceError("workflow_not_found", "Workflow health was not found", 404)
+    for health in workflow_health_rows(session):
+        if health.workflow_id == workflow_id:
+            return health
+    raise ServiceError("workflow_not_found", "Workflow health was not found", 404)
 
 
 @router.get("/workflows", response_model=WorkflowPage)
