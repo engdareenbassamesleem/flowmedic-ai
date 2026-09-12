@@ -8,6 +8,7 @@ from app.core.errors import ServiceError
 from app.core.security import sanitize
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import (
+    DemoInfo,
     Failure,
     FailurePage,
     IncidentOut,
@@ -83,6 +84,18 @@ async def sync_incidents(request: Request, session: DB, limit: Limit = 50, curso
         created += int(inserted)
     session.commit()
     return SyncResult(scanned=scanned, created=created, next_cursor=next_cursor)
+
+
+@router.get("/demo", response_model=DemoInfo)
+def demo_info(request: Request):
+    if not request.app.state.settings.demo_mode:
+        raise ServiceError("demo_not_enabled", "Demo mode is disabled", 404)
+    return DemoInfo(
+        mode="synthetic",
+        incident_id=request.app.state.demo_incident_id,
+        diagnosis_provider="mock",
+        note="Synthetic data only; no n8n instance or AI provider was contacted.",
+    )
 
 
 @router.get("/incidents", response_model=IncidentPage)

@@ -12,8 +12,10 @@ from app.api.routes import router
 from app.core.config import Settings
 from app.core.database import create_database
 from app.core.errors import ServiceError
+from app.demo import demo_failure
 from app.integrations.n8n.client import N8nClient
 from app.models.incident import Base
+from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import ErrorResponse
 
 
@@ -37,9 +39,21 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
                 app.state.n8n = N8nClient(config, n8n_http)
                 app.state.provider = (
                     CompatibleAIProvider(config, ai_http)
-                    if config.ai_api_key.get_secret_value()
+                    if config.ai_api_key.get_secret_value() and not config.demo_mode
                     else MockDiagnosisProvider()
                 )
+                if config.demo_mode:
+                    with factory() as session:
+                        failure = demo_failure()
+                        incident, _ = IncidentRepository(session).create_once(failure)
+                        if incident.diagnosis is None:
+                            incident.diagnosis = (
+                                await app.state.provider.diagnose(failure)
+                            ).model_dump()
+                            incident.diagnosis_provider = app.state.provider.name
+                            incident.status = "diagnosed"
+                        session.commit()
+                        app.state.demo_incident_id = incident.id
                 yield
         finally:
             engine.dispose()
@@ -77,6 +91,14 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/")
+    def index() -> dict[str, str | None]:
+        return {
+            "service": "FlowMedic AI",
+            "docs": "/docs",
+            "demo": "/api/v1/demo" if config.demo_mode else None,
+        }
 
     app.include_router(
         router,

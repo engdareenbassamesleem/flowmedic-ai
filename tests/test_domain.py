@@ -31,6 +31,18 @@ def test_invalid_configuration(values):
         Settings(_env_file=None, **values)
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"demo_mode": True, "n8n_base_url": "https://n8n.example", "n8n_api_key": "key"},
+        {"demo_mode": True, "ai_api_key": "key"},
+    ],
+)
+def test_demo_mode_rejects_live_provider_credentials(values):
+    with pytest.raises(ValidationError, match="DEMO_MODE"):
+        Settings(_env_file=None, **values)
+
+
 def test_normalization_and_persistence(execution):
     failure = normalize(Execution.model_validate(execution))
     assert failure.failed_node == "Fetch orders"

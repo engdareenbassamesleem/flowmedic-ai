@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4.1-mini"
     flowmedic_api_key: SecretStr = SecretStr("")
+    demo_mode: bool = False
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod
@@ -36,4 +37,8 @@ class Settings(BaseSettings):
     def key_requires_url(self):
         if self.n8n_api_key.get_secret_value() and not self.n8n_base_url:
             raise ValueError("N8N_BASE_URL is required when N8N_API_KEY is set")
+        if self.demo_mode and (
+            self.n8n_api_key.get_secret_value() or self.ai_api_key.get_secret_value()
+        ):
+            raise ValueError("DEMO_MODE cannot be used with N8N_API_KEY or AI_API_KEY")
         return self

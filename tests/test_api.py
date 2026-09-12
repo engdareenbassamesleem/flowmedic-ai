@@ -87,6 +87,28 @@ def test_bearer_authentication():
         )
 
 
+def test_demo_mode_seeds_a_diagnosed_synthetic_incident():
+    settings = Settings(_env_file=None, database_url="sqlite:///:memory:", demo_mode=True)
+    with TestClient(create_app(settings)) as c:
+        index = c.get("/").json()
+        assert index == {"service": "FlowMedic AI", "docs": "/docs", "demo": "/api/v1/demo"}
+        demo = c.get("/api/v1/demo")
+        assert demo.status_code == 200
+        assert demo.json()["diagnosis_provider"] == "mock"
+        assert "Synthetic" in demo.json()["note"]
+        incidents = c.get("/api/v1/incidents").json()["data"]
+        assert len(incidents) == 1
+        assert incidents[0]["id"] == demo.json()["incident_id"]
+        assert incidents[0]["status"] == "diagnosed"
+        assert incidents[0]["diagnosis"]["confidence"] == 0.55
+
+
+def test_demo_endpoint_is_unavailable_when_disabled(client):
+    response = client.get("/api/v1/demo")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "demo_not_enabled"
+
+
 def test_upstream_failure_has_safe_error():
     settings = Settings(
         _env_file=None,

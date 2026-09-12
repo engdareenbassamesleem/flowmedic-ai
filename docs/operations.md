@@ -36,6 +36,14 @@ and deploy behind a TLS reverse proxy before network exposure. There is no multi
 authorization, rate limiting, secret manager, or audit trail yet. Diagnosing an incident
 again replaces its last diagnosis and can incur another provider charge.
 
+## Public demo mode
+
+`DEMO_MODE=true` is the exception for a portfolio demonstration. It seeds one documented,
+synthetic failure and uses the deterministic mock provider. The setting rejects `N8N_API_KEY`
+and `AI_API_KEY`, so the demo process cannot call a live n8n or AI service. Use a dedicated
+database, leave `FLOWMEDIC_API_KEY` empty only for synthetic demo deployments, and do not
+mix this mode with real incidents or credentials.
+
 ## Persistence and concurrency
 
 One database belongs to one n8n instance. Execution IDs are unique within that instance;

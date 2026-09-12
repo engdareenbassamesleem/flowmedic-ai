@@ -59,6 +59,13 @@ class SyncResult(BaseModel):
     next_cursor: str | None = None
 
 
+class DemoInfo(BaseModel):
+    mode: Literal["synthetic"]
+    incident_id: str
+    diagnosis_provider: Literal["mock"]
+    note: str
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
