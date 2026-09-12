@@ -1,49 +1,223 @@
 # FlowMedic AI
 
-FlowMedic turns failed n8n workflow executions into persistent incidents and structured,
-uncertainty-aware diagnosis suggestions. Phase 1 is a backend MVP for one trusted n8n
-instance. It does not modify workflows or apply fixes.
+[![CI](https://github.com/engdareenbassamesleem/flowmedic-ai/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/engdareenbassamesleem/flowmedic-ai/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 
-## Phase 2 dashboard
+**AI-powered observability and incident diagnosis for automation workflows.**
 
-`frontend/` is a responsive Next.js 16 + TypeScript + Tailwind dashboard for engineering
-teams investigating automation failures. It consumes the FastAPI API directly and makes
-missing data explicit: it never invents workflow execution status, history, or incident
-counts that Phase 1 does not expose.
+FlowMedic turns failed n8n executions into persistent, sanitized incidents and provides
+structured AI-assisted diagnosis suggestions for human review. It is designed for
+automation engineers, AI engineers, technical operations teams, and agencies managing n8n
+workflows.
 
-| Dashboard page | Existing API used |
+## The problem
+
+Automation failures can be silent, difficult to trace, and expensive to investigate. Raw
+execution payloads may be large or sensitive, while the useful context—what failed, where,
+and when—is scattered across workflow and execution data.
+
+## What FlowMedic does today
+
+- Uses **read-only** n8n API calls to check connectivity, list workflows, and inspect recent
+  failed executions.
+- Normalizes failures into a small, sanitized incident record; repeated syncs do not create
+  duplicate incidents for the same execution.
+- Persists incidents and their latest diagnosis in SQLite through SQLAlchemy.
+- Generates typed, uncertainty-aware diagnosis suggestions using either a deterministic mock
+  provider or an OpenAI-compatible structured-output provider.
+- Provides a responsive Next.js dashboard for overview, workflows, incidents, incident
+  detail, and safe configuration status.
+
+FlowMedic is an investigation aid. It does not modify workflows, apply fixes, or claim that a
+diagnosis is certain.
+
+## Product preview
+
+The dashboard is available locally at `http://127.0.0.1:3000` after setup. No screenshots are
+committed yet, so this repository intentionally does not show fabricated product imagery.
+Add verified captures after running or deploying the dashboard; see
+[`docs/screenshots/README.md`](docs/screenshots/README.md) for the expected files.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    n8n["n8n API (read-only)"] --> integration["FastAPI n8n integration"]
+    integration --> normalize["Failure normalization and sanitization"]
+    normalize --> repository["Incident repository"]
+    repository --> database[("SQLite via SQLAlchemy")]
+    repository --> api["Typed FastAPI API"]
+    api --> provider["Diagnosis provider abstraction"]
+    provider --> mock["Deterministic mock provider"]
+    provider --> live["OpenAI-compatible structured-output provider"]
+    api --> dashboard["Next.js dashboard"]
+```
+
+The dashboard consumes the FastAPI API; it does not call n8n or an AI provider directly.
+Diagnosis is advisory output from the configured provider, not an automated repair action.
+
+```text
+app/
+  api/                 FastAPI routes and dependencies
+  integrations/n8n/    Read-only n8n client and upstream schemas
+  services/            Failure normalization
+  repositories/        Incident persistence and idempotency
+  ai/                  Diagnosis provider interface and adapters
+  schemas/             Public Pydantic response models
+  core/                Settings, database, sanitization, and safe errors
+frontend/
+  app/                 Next.js App Router pages
+  components/          Dashboard UI and accessible states
+  lib/                 Typed API client, types, formatting, and hooks
+tests/                 Offline backend and API tests
+```
+
+## Tech stack
+
+| Area | Technologies |
 |---|---|
-| Overview | `GET /health`, `GET /api/v1/system/status`, `GET /api/v1/workflows`, `GET /api/v1/incidents` |
-| Workflows | `GET /api/v1/workflows` |
-| Incidents | `GET /api/v1/incidents?limit=&offset=` |
-| Incident detail | `GET /api/v1/incidents/{id}`, `POST /api/v1/incidents/{id}/diagnose` |
-| Settings | `GET /health`, `GET /api/v1/system/status`, `GET /api/v1/n8n/status` |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy, SQLite, httpx |
+| Frontend | Next.js, React, TypeScript, Tailwind CSS |
+| AI | Provider abstraction, OpenAI-compatible structured-output adapter, deterministic mock provider |
+| Quality | pytest, Ruff, Vitest, ESLint, TypeScript |
+| Infrastructure | Docker, Docker Compose, GitHub Actions |
 
-The small `GET /api/v1/system/status` endpoint exposes only safe configuration state:
-n8n configured/not configured, mock/configured AI mode, and database engine. It never
-returns keys, URLs with credentials, or connection strings. CORS permits the local dashboard
-origins listed in `CORS_ALLOW_ORIGINS`.
+## Engineering decisions
 
-### Dashboard setup
+- **Read-only n8n integration:** the client issues API reads only; FlowMedic has no workflow
+  write or repair capability.
+- **Idempotent ingestion:** incidents are keyed by execution ID, and the repository handles
+  duplicate-insert races safely.
+- **Sanitized failure context:** the normalizer deliberately excludes execution `runData`, node
+  inputs/outputs, credentials, and the raw upstream error object.
+- **Typed public API:** FastAPI response models define workflow, failure, incident, diagnosis,
+  configuration-status, and error shapes.
+- **Provider abstraction:** the diagnosis path supports a deterministic mock and a configurable
+  OpenAI-compatible provider with strict JSON-schema output.
+- **Explicit uncertainty:** confidence is shown as a provider estimate, not a calibrated
+  probability; suggested fixes require review.
+- **Independent delivery checks:** CI runs Python checks on Python 3.12 and 3.13, frontend
+  lint/typecheck/tests/build, and separate backend and dashboard Docker builds.
+
+## Safety & reliability
+
+- FlowMedic never automatically modifies n8n workflows.
+- Diagnosis suggestions require human review before any production change.
+- API responses do not return configured API keys, connection strings, upstream response
+  bodies, or stack traces.
+- Sensitive values are sanitized before failure context is persisted or passed to a diagnosis
+  provider.
+- Demo mode contains one fixed synthetic incident and mock diagnosis only; it never contacts
+  n8n or a live AI provider.
+- Offline tests and CI use mocked n8n/AI HTTP interactions, so real credentials are not
+  required.
+
+## Local development
+
+### 1. Start the FastAPI backend
 
 ```bash
-# Terminal 1 — backend
+git clone https://github.com/engdareenbassamesleem/flowmedic-ai.git
+cd flowmedic-ai
+python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+cp .env.example .env
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
+```
 
-# Terminal 2 — dashboard
-cd frontend
+### 2. Start the dashboard
+
+In a second terminal:
+
+```bash
+cd flowmedic-ai/frontend
 cp .env.example .env.local
-npm install
+npm ci
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. The dashboard defaults to
-`http://127.0.0.1:8000`; change `NEXT_PUBLIC_API_BASE_URL` in
-`frontend/.env.local` for another API address. This variable is public browser configuration,
-so it must never contain a token or secret.
+Open `http://127.0.0.1:3000`. The frontend defaults to
+`http://127.0.0.1:8000`; set `NEXT_PUBLIC_API_BASE_URL` in `.env.local` to use another
+backend address. It is browser-visible configuration and must not contain a token or secret.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `N8N_BASE_URL` | unset | Required for n8n reads; URL with no credentials embedded |
+| `N8N_API_KEY` | empty | Required for n8n reads; never returned through the API |
+| `DATABASE_URL` | `sqlite:///./flowmedic.db` | SQLAlchemy database connection |
+| `AI_API_KEY` | empty | Selects a live compatible provider; empty uses the mock provider |
+| `AI_BASE_URL` | `https://api.openai.com/v1` | Trusted OpenAI-compatible provider base URL |
+| `AI_MODEL` | `gpt-4.1-mini` | Model expected to support strict JSON-schema output |
+| `FLOWMEDIC_API_KEY` | empty | Optional bearer token for routes other than `/health` |
+| `DEMO_MODE` | `false` | Enables the synthetic, credentials-free demo; cannot be combined with n8n or AI keys |
+| `CORS_ALLOW_ORIGINS` | local dashboard origins | Comma-separated frontend origins permitted by FastAPI |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only API base URL in `frontend/.env.local` |
+
+Without n8n credentials, local health and incident endpoints still work; n8n operations return
+a safe configuration error.
+
+## Demo mode
+
+Demo mode makes the full dashboard flow inspectable without n8n or AI credentials. It seeds
+one persistent, clearly synthetic workflow failure and uses the deterministic mock provider.
 
 ```bash
-# Dashboard checks
+DEMO_MODE=true DATABASE_URL=sqlite:///./flowmedic-demo.db \
+  python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
+```
+
+Then start the dashboard as above. Do not use demo mode with `N8N_API_KEY` or `AI_API_KEY`.
+
+## API
+
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs` when optional
+bearer authentication is disabled.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Local process liveness; does not probe n8n |
+| `GET` | `/api/v1/system/status` | Safe configuration state only |
+| `GET` | `/api/v1/n8n/status` | Check n8n read access |
+| `GET` | `/api/v1/workflows` | Sanitized workflow summaries with cursor pagination |
+| `GET` | `/api/v1/executions/failed` | Normalized failures from a recent execution page |
+| `POST` | `/api/v1/incidents/sync` | Explicitly ingest failures into persistent incidents |
+| `GET` | `/api/v1/incidents` | List persisted incidents with offset pagination |
+| `GET` | `/api/v1/incidents/{incident_id}` | Read one incident |
+| `POST` | `/api/v1/incidents/{incident_id}/diagnose` | Generate and persist an advisory diagnosis |
+| `GET` | `/api/v1/demo` | Synthetic demo metadata; available only with `DEMO_MODE=true` |
+
+`GET` endpoints do not ingest incidents. Error responses use the safe shape
+`{"error":{"code":"...","message":"..."}}`.
+
+## Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Compose binds the API and dashboard to localhost, persists SQLite in a named volume, and runs
+the API image as a non-root user. The API is available at `http://127.0.0.1:8000` and the
+dashboard at `http://127.0.0.1:3000`.
+
+## Testing and CI
+
+```bash
+# Backend
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+
+# Frontend
 cd frontend
 npm run lint
 npm run typecheck
@@ -51,200 +225,34 @@ npm test
 npm run build
 ```
 
-For the credentials-free portfolio demo, run the backend with `DEMO_MODE=true` before
-starting the dashboard. It displays one clearly synthetic incident and mock diagnosis.
-
-### Architecture
-
-```text
-frontend/
-  app/             Next.js App Router pages
-  components/      Dashboard UI and accessible shared states
-  lib/             Typed FastAPI client, response types, formatting, query hook
-  tests/           API, action, and empty-state tests
-app/               Existing FastAPI backend
-```
-
-### Screenshots
-
-Add dashboard screenshots here after a deployed demo is available:
-
-- `docs/screenshots/overview.png`
-- `docs/screenshots/incidents.png`
-- `docs/screenshots/incident-detail.png`
-
-## Public demo mode
-
-The highest-value Phase 2 increment is a credentials-free, reproducible API demo. It seeds
-one fixed **synthetic** workflow failure, persists it, and produces a deterministic mock
-diagnosis through the same incident and diagnosis path used by the service. It never contacts
-n8n or an AI provider, and it must not be used with `N8N_API_KEY` or `AI_API_KEY`.
-
-```bash
-DEMO_MODE=true DATABASE_URL=sqlite:///./flowmedic-demo.db \
-  python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
-```
-
-Open `http://127.0.0.1:8000/` for the service entry point, `http://127.0.0.1:8000/docs`
-for the interactive OpenAPI demo, or call:
-
-```bash
-curl http://127.0.0.1:8000/api/v1/demo
-curl http://127.0.0.1:8000/api/v1/incidents
-```
-
-For a public deployment, use a dedicated demo database and synthetic-only environment;
-do not expose a live n8n configuration or production incident database. The demo makes the
-architecture and safety boundaries inspectable, but it is not clinical software and the
-diagnosis is an advisory mock response.
-
-## Phase 1 capabilities
-
-- Check n8n API connectivity and list workflow summaries.
-- Inspect recent execution pages and identify `error` / `crashed` executions.
-- Fetch details for failed executions and older responses that omit status.
-- Normalize failures into sanitized incidents; repeated syncs do not duplicate incidents.
-- Persist incidents and their latest diagnosis in SQLAlchemy/SQLite.
-- Use a deterministic mock without an AI key, or a configurable OpenAI-compatible
-  chat completions provider that supports strict JSON schema output.
-- Expose typed FastAPI endpoints, bounded pagination, consistent errors and optional bearer auth.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Caller --> API[FastAPI routes]
-    API --> N8N[n8n client]
-    N8N --> Remote[n8n public API]
-    API --> Normalize[Failure normalization and sanitization]
-    Normalize --> Repo[Incident repository]
-    Repo --> DB[(SQLAlchemy / SQLite)]
-    API --> Provider[Diagnosis provider interface]
-    Provider --> Mock[Deterministic mock]
-    Provider --> AI[OpenAI-compatible structured output]
-```
-
-```text
-app/
-  api/                 HTTP routes and dependencies
-  core/                Settings, database, safe errors, sanitization
-  integrations/n8n/    Upstream schemas, client, failure detection
-  models/              SQLAlchemy tables
-  schemas/             Public Pydantic models
-  repositories/        Persistence and idempotency
-  services/            Incident normalization
-  ai/                  Provider protocol, mock and live adapter
-  main.py              Application factory and lifecycle
-tests/                  Offline unit and API integration tests
-docs/                   Operational notes
-.github/workflows/      Python checks and Docker build
-```
-
-## Local setup (Python 3.12+)
-
-```bash
-git clone https://github.com/engdareenbassamesleem/flowmedic-ai.git
-cd flowmedic-ai
-python -m venv .venv
-# Linux/macOS:
-source .venv/bin/activate
-# Windows PowerShell instead:
-# .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-cp .env.example .env
-# PowerShell instead: Copy-Item .env.example .env
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
-```
-
-Edit `.env` with your n8n URL and API key. Without n8n credentials the health and
-incident endpoints still work, while n8n operations return a safe 503 configuration error.
-Interactive API docs are at `http://127.0.0.1:8000/docs` when bearer auth is disabled.
-When auth is enabled, docs and OpenAPI also require the bearer header.
-
-## Environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `N8N_BASE_URL` | unset | Required for n8n calls; instance URL or URL ending `/api/v1` |
-| `N8N_API_KEY` | empty | Required for n8n calls; never returned to clients |
-| `DATABASE_URL` | `sqlite:///./flowmedic.db` | SQLAlchemy database connection |
-| `REQUEST_TIMEOUT` | `15` | Per-request timeout in seconds, greater than 0 and at most 120 |
-| `AI_API_KEY` | empty | Empty selects mock; nonempty selects compatible live adapter |
-| `AI_BASE_URL` | `https://api.openai.com/v1` | Trusted AI provider base URL |
-| `AI_MODEL` | `gpt-4.1-mini` | Configurable model supporting strict JSON schema output |
-| `FLOWMEDIC_API_KEY` | empty | Optional bearer token for all routes except `/health` |
-| `DEMO_MODE` | `false` | Seed one synthetic diagnosed incident and enable `/api/v1/demo`; cannot be combined with n8n or AI keys |
-| `CORS_ALLOW_ORIGINS` | local dashboard origins | Comma-separated browser origins permitted to call the API |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only setting in `frontend/.env.local`; FastAPI address without secrets |
-
-No credentials are required for offline tests or mock diagnosis. A configured live
-provider error is reported; it never silently falls back to a mock answer.
-
-## API
-
-| Method | Path | Behavior |
-|---|---|---|
-| GET | `/health` | Local process liveness; does not probe n8n |
-| GET | `/api/v1/n8n/status` | Check n8n workflow-read access |
-| GET | `/api/v1/workflows` | Sanitized workflow summaries and cursor |
-| GET | `/api/v1/executions/failed` | Read normalized failures in one recent-execution page |
-| POST | `/api/v1/incidents/sync` | Ingest failures from one page, returning scanned/created counts |
-| GET | `/api/v1/incidents` | List persisted incidents, including latest diagnoses |
-| GET | `/api/v1/incidents/{incident_id}` | Read one incident |
-| POST | `/api/v1/incidents/{incident_id}/diagnose` | Generate and persist a new diagnosis |
-| GET | `/api/v1/demo` | Metadata and incident ID for the synthetic public demo; only when `DEMO_MODE=true` |
-
-Workflow and execution endpoints accept `limit` (1–100, default 50) and `cursor`.
-The limit counts scanned executions, so a page can contain zero failures and still
-have a `next_cursor`. Continue until the cursor is null. Sync is explicit: GET requests
-never ingest incidents. Incident listing uses `limit` and `offset` (default 0).
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/api/v1/n8n/status
-curl "http://127.0.0.1:8000/api/v1/executions/failed?limit=50"
-curl -X POST "http://127.0.0.1:8000/api/v1/incidents/sync?limit=50"
-curl http://127.0.0.1:8000/api/v1/incidents
-# Replace INCIDENT_ID with the returned UUID:
-curl -X POST http://127.0.0.1:8000/api/v1/incidents/INCIDENT_ID/diagnose
-# With bearer authentication, add: -H "Authorization: Bearer YOUR_LOCAL_TOKEN"
-```
-
-Errors use `{"error":{"code":"...","message":"..."}}`. Invalid input returns 422;
-missing incidents return 404; upstream failures return 502/503/504. Error bodies do
-not echo upstream bodies or stack traces. A diagnosis includes summary, probable root
-cause, affected component, recommended fix, confidence (0–1), and risk level.
-`diagnosis_provider` explicitly distinguishes mock from live output. Confidence is a
-provider estimate, not a calibrated probability. All suggested fixes need human review.
-
-## Docker
-
-```bash
-cp .env.example .env
-# Configure .env first; for host n8n on Docker Desktop use http://host.docker.internal:5678
-docker compose up --build
-```
-
-Compose binds only to localhost and persists SQLite in a named volume. The image runs
-as a non-root user. It starts the API at `http://127.0.0.1:8000` and dashboard at
-`http://127.0.0.1:3000`. Inside a container, `localhost` refers to that container, not the host.
-
-## Checks
-
-```bash
-python -m pytest -q
-python -m ruff check .
-python -m ruff format --check .
-```
-
-Tests mock all n8n and AI HTTP requests and exercise actual FastAPI lifespan and
-SQLite persistence. CI runs checks and a startup probe on Python 3.12/3.13, plus a
-Docker build. See [operational notes](docs/operations.md) for limitations.
+The GitHub Actions workflow is named **FlowMedic checks** and contains `backend`, `frontend`,
+and `docker` jobs. It runs on push and pull request.
 
 ## Roadmap
 
-Phase 2 should add scheduled polling with durable cursors, retry/backoff and retention,
-database migrations, PostgreSQL integration tests, diagnosis evaluation and audit history,
-and deployment authentication/observability. A dashboard and notifications can follow.
-Payments, multi-tenancy, other automation platforms and automatic workflow modification
-are outside Phase 1.
+**Completed**
+
+- Core FastAPI backend and typed API
+- Incident persistence with idempotent ingestion
+- AI diagnosis provider abstraction and deterministic demo mode
+- SaaS-style Next.js dashboard
+
+**Next**
+
+- Durable monitoring/polling
+- Historical workflow-health metrics
+- Retry/backoff handling
+- Durable checkpoints
+
+**Later**
+
+- Alerting
+- Safe repair suggestions
+- Additional automation-platform integrations
+- Multi-tenancy and billing
+
+## License
+
+No license file is currently included. Choose a license before inviting external reuse or
+contributions; MIT is a simple permissive option, while retaining no license keeps reuse
+rights reserved by default.
