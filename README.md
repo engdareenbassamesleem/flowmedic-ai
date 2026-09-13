@@ -300,3 +300,7 @@ push and pull request.
 No license file is currently included. Choose a license before inviting external reuse or
 contributions; MIT is a simple permissive option, while retaining no license keeps reuse
 rights reserved by default.
+
+## Reviewer entry points
+
+For a short code tour, start with app/services/health.py (deterministic rules), app/integrations/n8n/client.py (upstream API boundary) and tests/test_monitoring.py (monitoring behavior). Use the documented synthetic demo to inspect the system before configuring live integrations. This is a portfolio implementation; the README's test commands are reproducible checks, not a claim that every deployment has been validated.
