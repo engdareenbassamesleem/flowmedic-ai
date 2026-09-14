@@ -1,10 +1,11 @@
 import asyncio
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import create_engine, inspect, select
 
 from app.core.config import Settings
 from app.core.database import create_database
+from app.core.migrations import upgrade_database
 from app.models.incident import Base, ExecutionHistory, Incident
 from app.repositories.monitoring import MonitoringRepository
 from app.services.health import build_workflow_health
@@ -173,3 +174,19 @@ def test_retention_removes_only_old_history_and_health_uses_retained_window(tmp_
         assert health.health == "degraded"
 
     asyncio.run(run())
+
+
+def test_monitoring_hardening_migration_adds_non_destructive_columns(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'migrated.db'}"
+    upgrade_database(database_url)
+    columns = {
+        column["name"]
+        for column in inspect(create_engine(database_url)).get_columns("monitoring_checkpoints")
+    }
+    assert {
+        "backfill_cursor",
+        "backfill_completed_at",
+        "last_fresh_poll_at",
+        "last_retention_at",
+        "lease_expires_at",
+    } <= columns
