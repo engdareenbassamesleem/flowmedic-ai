@@ -12,10 +12,7 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    columns = {
-        column["name"]
-        for column in sa.inspect(bind).get_columns("monitoring_checkpoints")
-    }
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("monitoring_checkpoints")}
     additions = (
         ("backfill_cursor", sa.Text()),
         ("backfill_completed_at", sa.DateTime(timezone=True)),
@@ -29,10 +26,7 @@ def upgrade() -> None:
     for name, column_type in additions:
         if name not in columns:
             op.add_column("monitoring_checkpoints", sa.Column(name, column_type, nullable=True))
-    indexes = {
-        index["name"]
-        for index in sa.inspect(bind).get_indexes("monitoring_checkpoints")
-    }
+    indexes = {index["name"] for index in sa.inspect(bind).get_indexes("monitoring_checkpoints")}
     if "ix_monitoring_checkpoints_lease_expires_at" not in indexes:
         op.create_index(
             "ix_monitoring_checkpoints_lease_expires_at",
