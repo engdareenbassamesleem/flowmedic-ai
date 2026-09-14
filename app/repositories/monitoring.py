@@ -175,7 +175,5 @@ class ExecutionHistoryRepository:
         )
         if not ids:
             return 0
-        result = self.session.execute(
-            delete(ExecutionHistory).where(ExecutionHistory.id.in_(ids))
-        )
+        result = self.session.execute(delete(ExecutionHistory).where(ExecutionHistory.id.in_(ids)))
         return int(result.rowcount or 0)
