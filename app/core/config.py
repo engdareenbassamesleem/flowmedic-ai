@@ -51,4 +51,6 @@ class Settings(BaseSettings):
             self.n8n_api_key.get_secret_value() or self.ai_api_key.get_secret_value()
         ):
             raise ValueError("DEMO_MODE cannot be used with N8N_API_KEY or AI_API_KEY")
+        if self.monitor_lease_seconds <= self.request_timeout:
+            raise ValueError("MONITOR_LEASE_SECONDS must exceed REQUEST_TIMEOUT")
         return self
