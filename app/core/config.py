@@ -18,8 +18,13 @@ class Settings(BaseSettings):
     cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     monitor_poll_interval_seconds: float = Field(default=60, ge=10, le=3600)
     monitor_page_size: int = Field(default=50, ge=1, le=100)
+    monitor_backfill_pages_per_cycle: int = Field(default=1, ge=0, le=5)
+    monitor_lease_seconds: float = Field(default=120, ge=30, le=3600)
     monitor_max_retries: int = Field(default=3, ge=0, le=5)
     monitor_retry_base_seconds: float = Field(default=2, gt=0, le=60)
+    execution_history_retention_days: int = Field(default=30, ge=1, le=3650)
+    retention_cleanup_interval_seconds: float = Field(default=86400, ge=60, le=604800)
+    retention_cleanup_batch_size: int = Field(default=500, ge=1, le=10000)
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod
