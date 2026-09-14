@@ -199,6 +199,7 @@ class MonitoringService:
                     delay,
                     exc.code,
                 )
+                self._heartbeat_lease()
                 await asyncio.sleep(delay)
         raise ServiceError("monitoring_error", "Monitoring poll failed", 503)
 
