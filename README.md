@@ -27,8 +27,9 @@ and when—is scattered across workflow and execution data.
 - Normalizes failures into a small, sanitized incident record; repeated syncs do not create
   duplicate incidents for the same execution.
 - Persists incidents and their latest diagnosis in SQLite through SQLAlchemy.
-- Runs a durable, read-only monitoring loop when n8n credentials are configured. It stores
-  lightweight execution history and an opaque n8n pagination checkpoint.
+- Runs a durable, read-only monitoring loop when n8n credentials are configured. Every cycle
+  polls the newest execution page first; a separate bounded cursor backfills older pages without
+  delaying fresh failure discovery.
 - Derives deterministic workflow health and global metrics from persisted history—not from an
   LLM—and exposes unavailable data as unknown rather than guessing.
 - Generates typed, uncertainty-aware diagnosis suggestions using either a deterministic mock
@@ -50,18 +51,17 @@ Add verified captures after running or deploying the dashboard; see
 
 ```mermaid
 flowchart TB
-    n8n["n8n API (read-only)"] --> integration["FastAPI n8n integration"]
-    integration --> monitor["Durable monitoring service"]
-    monitor --> normalize["Failure normalization and sanitization"]
-    normalize --> repository["Incident and history repositories"]
-    repository --> database[("SQLite + Alembic migrations")]
-    database --> metrics["Deterministic health metrics"]
-    monitor --> api["Typed FastAPI API"]
+    n8n["n8n API (read-only)"] --> fresh["Fresh polling: newest page"]
+    n8n --> backfill["Optional bounded backfill"]
+    fresh --> lease["SQLite ownership lease"]
+    backfill --> lease
+    lease --> normalize["Sanitize and normalize"]
+    normalize --> storage[("SQLite history + incidents")]
+    storage --> metrics["Deterministic retained-window metrics"]
+    storage --> api["Typed FastAPI API"]
     metrics --> api
-    api --> provider["Diagnosis provider abstraction"]
-    provider --> mock["Deterministic mock provider"]
-    provider --> live["OpenAI-compatible structured-output provider"]
     api --> dashboard["Next.js dashboard"]
+    api --> provider["Mock or live diagnosis provider"]
 ```
 
 The dashboard consumes the FastAPI API; it does not call n8n or an AI provider directly.
@@ -101,11 +101,14 @@ tests/                 Offline backend and API tests
 - **Idempotent ingestion:** incidents are keyed by execution ID, and the repository handles
   duplicate-insert races safely. Execution history has its own source + execution-ID uniqueness
   constraint.
-- **Opaque durable checkpoints:** the n8n cursor is stored and replayed without assuming that
-  execution identifiers are numeric or ordered. When a page has no continuation cursor, the
-  monitor returns to the newest page; database uniqueness makes that safe.
-- **Single-process polling guard:** one FastAPI lifespan task owns polling, and an async lock
-  skips overlapping manual or scheduled syncs.
+- **Fresh-first cursor strategy:** every scheduled cycle reads n8n's newest page with no cursor.
+  A separate opaque backfill cursor advances older pages in bounded work; no execution-ID ordering
+  is assumed and repeated newest-page reads are safe through database uniqueness.
+- **Multi-process ownership lease:** SQLite stores an expiring, refreshable lease. A local async
+  lock prevents overlap in one process, while the lease safely contends across processes and
+  recovers after a crash or expiry.
+- **Bounded retention:** execution history is deleted in configured batches after its retention
+  window; incidents and checkpoints are never deleted by that cleanup.
 - **Bounded recovery:** timeouts, connectivity failures, rate limits, and n8n 5xx responses
   receive bounded exponential retries; authentication and configuration errors do not.
 - **Sanitized failure context:** the normalizer deliberately excludes execution `runData`, node
@@ -131,7 +134,7 @@ tests/                 Offline backend and API tests
   n8n or a live AI provider. It also seeds a clearly synthetic healthy, degraded, and unhealthy
   workflow history for the dashboard.
 - Offline tests and CI use mocked n8n/AI HTTP interactions, so real credentials are not
-  required.
+  required. Optional live n8n validation is opt-in and never runs in CI.
 
 ## Local development
 
@@ -179,8 +182,13 @@ backend address. It is browser-visible configuration and must not contain a toke
 | `CORS_ALLOW_ORIGINS` | local dashboard origins | Comma-separated frontend origins permitted by FastAPI |
 | `MONITOR_POLL_INTERVAL_SECONDS` | `60` | Read-only polling cadence; 10–3600 seconds |
 | `MONITOR_PAGE_SIZE` | `50` | n8n execution page size; 1–100 |
+| `MONITOR_BACKFILL_PAGES_PER_CYCLE` | `1` | Bounded older-page work after the fresh poll; 0 disables backfill |
+| `MONITOR_LEASE_SECONDS` | `120` | SQLite lease expiry for cross-process polling ownership |
 | `MONITOR_MAX_RETRIES` | `3` | Maximum transient retry attempts per poll |
 | `MONITOR_RETRY_BASE_SECONDS` | `2` | Initial exponential-backoff delay |
+| `EXECUTION_HISTORY_RETENTION_DAYS` | `30` | Retained execution-history window; incidents are not deleted |
+| `RETENTION_CLEANUP_INTERVAL_SECONDS` | `86400` | Minimum interval between retention cleanup attempts |
+| `RETENTION_CLEANUP_BATCH_SIZE` | `500` | Maximum history records deleted in one cleanup run |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only API base URL in `frontend/.env.local` |
 
 Without n8n credentials, local health and incident endpoints still work; n8n operations return
@@ -210,7 +218,7 @@ bearer authentication is disabled.
 | `GET` | `/api/v1/system/status` | Safe configuration state only |
 | `GET` | `/api/v1/n8n/status` | Check n8n read access |
 | `GET` | `/api/v1/monitoring/status` | Safe polling state and durable checkpoint summary |
-| `POST` | `/api/v1/monitoring/sync` | Run one idempotent read-only monitoring page |
+| `POST` | `/api/v1/monitoring/sync` | Run fresh polling plus bounded idempotent backfill |
 | `GET` | `/api/v1/metrics/overview` | Persisted global workflow-health metrics |
 | `GET` | `/api/v1/metrics/workflows` | Persisted health metrics for monitored workflows |
 | `GET` | `/api/v1/workflows/{workflow_id}/health` | One workflow's deterministic health state |
@@ -236,8 +244,25 @@ Health uses each workflow's latest 20 persisted execution records:
 - **Unhealthy:** two or more recent failures, a failure with no recent success, or two or more
   open incidents exist.
 
-The global success/failure counts use the latest 100 persisted records. These are deterministic
-rules and not AI-generated judgments.
+The global success/failure counts use the latest 100 persisted records. With retention enabled,
+all rates and health states are calculated from retained history, not lifetime data. These are
+deterministic rules and not AI-generated judgments.
+
+## Live n8n validation
+
+CI is intentionally offline. To validate a real, non-production n8n instance locally, set
+`N8N_BASE_URL` and `N8N_API_KEY` in `.env`, then explicitly opt in:
+
+```bash
+RUN_LIVE_N8N_VALIDATION=true python -m pytest -q -m integration
+```
+
+Use a harmless test workflow and create one normal run plus one controlled failure, such as an
+HTTP Request node pointed at a deliberately nonexistent test URL, a missing expected test field,
+or a controlled mock-endpoint failure. Then call `POST /api/v1/monitoring/sync`, inspect
+`GET /api/v1/monitoring/status` and the dashboard history metrics, and run the same sync again
+to confirm that history and incidents are not duplicated. The test and API only read n8n; they
+never trigger, replay, modify, or repair a workflow. Do not commit `.env` or credentials.
 
 ## Docker Compose
 
@@ -280,6 +305,7 @@ push and pull request.
 - AI diagnosis provider abstraction and deterministic demo mode
 - SaaS-style Next.js dashboard
 - Durable monitoring, checkpoints, retry/backoff, and execution history
+- Fresh-first polling, bounded backfill, SQLite ownership leasing, and retention
 - Deterministic workflow health and monitoring metrics
 
 **Next**
