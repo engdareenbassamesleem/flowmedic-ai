@@ -1,6 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,12 +16,7 @@ class MonitoringRepository:
         self.session = session
 
     def checkpoint(self, source: str, source_identifier: str) -> MonitoringCheckpoint:
-        checkpoint = self.session.scalar(
-            select(MonitoringCheckpoint).where(
-                MonitoringCheckpoint.source == source,
-                MonitoringCheckpoint.source_identifier == source_identifier,
-            )
-        )
+        checkpoint = self.existing_checkpoint(source, source_identifier)
         if checkpoint is not None:
             return checkpoint
         now = utc_now()
@@ -36,12 +31,7 @@ class MonitoringRepository:
                 self.session.add(checkpoint)
                 self.session.flush()
         except IntegrityError:
-            checkpoint = self.session.scalar(
-                select(MonitoringCheckpoint).where(
-                    MonitoringCheckpoint.source == source,
-                    MonitoringCheckpoint.source_identifier == source_identifier,
-                )
-            )
+            checkpoint = self.existing_checkpoint(source, source_identifier)
             if checkpoint is None:
                 raise
         return checkpoint
@@ -55,6 +45,76 @@ class MonitoringRepository:
                 MonitoringCheckpoint.source_identifier == source_identifier,
             )
         )
+
+    def acquire_lease(
+        self,
+        source: str,
+        source_identifier: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> tuple[bool, bool]:
+        """Acquire the source lease atomically; returns (acquired, stale_lease_recovered)."""
+        checkpoint = self.checkpoint(source, source_identifier)
+        now = utc_now()
+        previous_expiry = checkpoint.lease_expires_at
+        expiry = now + timedelta(seconds=lease_seconds)
+        result = self.session.execute(
+            update(MonitoringCheckpoint)
+            .where(
+                MonitoringCheckpoint.id == checkpoint.id,
+                or_(
+                    MonitoringCheckpoint.lease_owner_id == owner_id,
+                    MonitoringCheckpoint.lease_expires_at.is_(None),
+                    MonitoringCheckpoint.lease_expires_at < now,
+                ),
+            )
+            .values(
+                lease_owner_id=owner_id,
+                lease_acquired_at=now,
+                lease_heartbeat_at=now,
+                lease_expires_at=expiry,
+                updated_at=now,
+            )
+        )
+        self.session.commit()
+        recovered = bool(previous_expiry is not None and previous_expiry < now)
+        return result.rowcount == 1, recovered
+
+    def heartbeat_lease(self, source: str, source_identifier: str, owner_id: str, lease_seconds: float) -> bool:
+        checkpoint = self.existing_checkpoint(source, source_identifier)
+        if checkpoint is None:
+            return False
+        now = utc_now()
+        result = self.session.execute(
+            update(MonitoringCheckpoint)
+            .where(
+                MonitoringCheckpoint.id == checkpoint.id,
+                MonitoringCheckpoint.lease_owner_id == owner_id,
+                MonitoringCheckpoint.lease_expires_at >= now,
+            )
+            .values(
+                lease_heartbeat_at=now,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+                updated_at=now,
+            )
+        )
+        self.session.commit()
+        return result.rowcount == 1
+
+    def release_lease(self, source: str, source_identifier: str, owner_id: str) -> None:
+        checkpoint = self.existing_checkpoint(source, source_identifier)
+        if checkpoint is None:
+            return
+        now = utc_now()
+        self.session.execute(
+            update(MonitoringCheckpoint)
+            .where(
+                MonitoringCheckpoint.id == checkpoint.id,
+                MonitoringCheckpoint.lease_owner_id == owner_id,
+            )
+            .values(lease_owner_id=None, lease_expires_at=now, updated_at=now)
+        )
+        self.session.commit()
 
 
 class ExecutionHistoryRepository:
@@ -90,3 +150,17 @@ class ExecutionHistoryRepository:
     def attach_incident(self, history: ExecutionHistory, incident_id: str) -> None:
         if history.incident_id is None:
             history.incident_id = incident_id
+
+    def delete_recorded_before(self, cutoff: datetime, batch_size: int) -> int:
+        ids = list(
+            self.session.scalars(
+                select(ExecutionHistory.id)
+                .where(ExecutionHistory.recorded_at < cutoff)
+                .order_by(ExecutionHistory.recorded_at)
+                .limit(batch_size)
+            )
+        )
+        if not ids:
+            return 0
+        result = self.session.execute(delete(ExecutionHistory).where(ExecutionHistory.id.in_(ids)))
+        return int(result.rowcount or 0)
