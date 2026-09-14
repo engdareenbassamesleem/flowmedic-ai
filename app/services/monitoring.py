@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from app.core.errors import ServiceError
 from app.integrations.n8n.client import Execution, ExecutionPage, is_failed
 from app.repositories.incidents import IncidentRepository
-from app.repositories.monitoring import ExecutionHistoryRepository, MonitoringRepository
+from app.repositories.monitoring import ExecutionHistoryRepository, MonitoringRepository, is_expired
 from app.schemas.domain import MonitoringStatus, MonitoringSyncResult
 from app.services.incidents import normalize
 
@@ -89,10 +89,7 @@ class MonitoringService:
             )
             if checkpoint is None:
                 lease_state = "unclaimed"
-            elif (
-                checkpoint.lease_expires_at is not None
-                and checkpoint.lease_expires_at > utc_now()
-            ):
+            elif not is_expired(checkpoint.lease_expires_at):
                 lease_state = (
                     "active" if checkpoint.lease_owner_id == self._owner_id else "standby"
                 )
@@ -345,7 +342,12 @@ class MonitoringService:
             now = utc_now()
             if (
                 checkpoint.last_retention_at is not None
-                and now - checkpoint.last_retention_at
+                and now
+                - (
+                    checkpoint.last_retention_at.replace(tzinfo=UTC)
+                    if checkpoint.last_retention_at.tzinfo is None
+                    else checkpoint.last_retention_at.astimezone(UTC)
+                )
                 < timedelta(seconds=self.settings.retention_cleanup_interval_seconds)
             ):
                 return
