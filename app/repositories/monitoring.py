@@ -87,7 +87,13 @@ class MonitoringRepository:
         recovered = is_expired(previous_expiry, now)
         return result.rowcount == 1, recovered
 
-    def heartbeat_lease(self, source: str, source_identifier: str, owner_id: str, lease_seconds: float) -> bool:
+    def heartbeat_lease(
+        self,
+        source: str,
+        source_identifier: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> bool:
         checkpoint = self.existing_checkpoint(source, source_identifier)
         if checkpoint is None:
             return False
@@ -169,5 +175,7 @@ class ExecutionHistoryRepository:
         )
         if not ids:
             return 0
-        result = self.session.execute(delete(ExecutionHistory).where(ExecutionHistory.id.in_(ids)))
+        result = self.session.execute(
+            delete(ExecutionHistory).where(ExecutionHistory.id.in_(ids))
+        )
         return int(result.rowcount or 0)
