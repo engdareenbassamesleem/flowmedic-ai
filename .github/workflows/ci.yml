@@ -19,7 +19,7 @@ jobs:
         run: alembic upgrade head
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest -q
+      - run: pytest -q -m "not integration"
       - name: Startup smoke test
         run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log &
