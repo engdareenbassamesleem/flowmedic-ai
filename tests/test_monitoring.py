@@ -21,6 +21,8 @@ def test_monitoring_is_disabled_without_n8n_configuration():
         status = client.get("/api/v1/monitoring/status").json()
         assert status["enabled"] is False
         assert status["state"] == "disabled"
+        assert status["lease_state"] == "unclaimed"
+        assert status["retention_days"] == 30
         assert client.post("/api/v1/monitoring/sync").json()["status"] == "disabled"
 
 
@@ -64,6 +66,9 @@ def test_manual_monitoring_sync_persists_history_checkpoint_and_incident(client)
     assert overview["monitored_workflow_count"] == 1
     assert overview["recent_failure_count"] == 1
     assert overview["last_successful_monitoring_sync_at"] is not None
+    hardened = client.get("/api/v1/monitoring/status").json()
+    assert hardened["last_fresh_poll_at"] is not None
+    assert hardened["backfill_state"] == "pending"
 
 
 def test_workflow_health_endpoint_is_safe_for_missing_history(client):
