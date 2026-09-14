@@ -89,7 +89,10 @@ class MonitoringService:
             )
             if checkpoint is None:
                 lease_state = "unclaimed"
-            elif not is_expired(checkpoint.lease_expires_at):
+            elif (
+                checkpoint.lease_expires_at is not None
+                and not is_expired(checkpoint.lease_expires_at)
+            ):
                 lease_state = (
                     "active" if checkpoint.lease_owner_id == self._owner_id else "standby"
                 )
