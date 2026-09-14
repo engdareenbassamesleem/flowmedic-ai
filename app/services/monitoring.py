@@ -270,7 +270,9 @@ class MonitoringService:
                 checkpoint.backfill_cursor = page.nextCursor
                 checkpoint.backfill_completed_at = None if page.nextCursor else now
             checkpoint.last_execution_id = (
-                entries[-1].id if entries else checkpoint.last_execution_id
+                entries[-1].id
+                if entries
+                else checkpoint.last_execution_id
             )
             checkpoint.last_checked_at = now
             checkpoint.last_fresh_poll_at = now
