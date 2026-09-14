@@ -184,6 +184,7 @@ class MonitoringService:
     async def _sync_with_retries(self) -> MonitoringSyncResult:
         for attempt in range(self.settings.monitor_max_retries + 1):
             try:
+                self._heartbeat_lease()
                 return await self._sync_cycle()
             except ServiceError as exc:
                 if exc.code not in TRANSIENT_CODES or attempt >= self.settings.monitor_max_retries:
@@ -328,12 +329,14 @@ class MonitoringService:
 
     def _heartbeat_lease(self) -> None:
         with self.session_factory() as session:
-            MonitoringRepository(session).heartbeat_lease(
+            active = MonitoringRepository(session).heartbeat_lease(
                 SOURCE,
                 SOURCE_IDENTIFIER,
                 self._owner_id,
                 self.settings.monitor_lease_seconds,
             )
+        if not active:
+            raise ServiceError("monitoring_lease_lost", "Monitoring ownership lease was lost", 503)
 
     def _run_retention_if_due(self) -> None:
         with self.session_factory() as session:
