@@ -56,6 +56,8 @@ export interface SystemStatus {
 }
 
 export type MonitoringState = "disabled" | "idle" | "running" | "degraded";
+export type BackfillState = "disabled" | "pending" | "complete";
+export type LeaseState = "active" | "standby" | "unclaimed";
 export type WorkflowHealthState = "unknown" | "healthy" | "degraded" | "unhealthy";
 
 export interface MonitoringStatus {
@@ -63,10 +65,17 @@ export interface MonitoringStatus {
   state: MonitoringState;
   poll_interval_seconds: number;
   last_checked_at: string | null;
+  last_fresh_poll_at: string | null;
   last_successful_sync_at: string | null;
   last_error_at: string | null;
   last_error_summary: string | null;
   consecutive_failure_count: number;
+  backfill_pending: boolean;
+  backfill_completed_at: string | null;
+  backfill_state: BackfillState;
+  lease_state: LeaseState;
+  retention_days: number;
+  last_retention_at: string | null;
 }
 
 export interface WorkflowHealth {
