@@ -15,6 +15,7 @@ class FreshThenBackfillN8n:
     def __init__(self):
         self.calls: list[str | None] = []
         self.fresh_count = 0
+        self.repeat_fresh = False
 
     async def recent_executions(self, limit, cursor):
         from app.integrations.n8n.client import Execution, ExecutionPage
@@ -25,7 +26,7 @@ class FreshThenBackfillN8n:
             return ExecutionPage(
                 data=[
                     Execution(
-                        id=f"fresh-{self.fresh_count}",
+                        id="fresh-1" if self.repeat_fresh else f"fresh-{self.fresh_count}",
                         workflowId="workflow",
                         status="success",
                     )
@@ -82,13 +83,14 @@ def test_fresh_poll_finds_new_execution_while_backfill_is_pending(tmp_path):
 def test_repeated_fresh_pages_do_not_duplicate_history(tmp_path):
     async def run():
         n8n = FreshThenBackfillN8n()
+        n8n.repeat_fresh = True
         service, factory = service_with_database(tmp_path, n8n)
         await service.sync()
         await service.sync()
         await service.sync()
         with factory() as session:
             count = len(list(session.scalars(select(ExecutionHistory))))
-        assert count == 3
+        assert count == 2
 
     asyncio.run(run())
 
