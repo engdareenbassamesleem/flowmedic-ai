@@ -73,6 +73,8 @@ class SystemStatus(BaseModel):
 
 
 MonitoringState = Literal["disabled", "idle", "running", "degraded"]
+BackfillState = Literal["disabled", "pending", "complete"]
+LeaseState = Literal["active", "standby", "unclaimed"]
 WorkflowHealthState = Literal["unknown", "healthy", "degraded", "unhealthy"]
 
 
@@ -81,10 +83,17 @@ class MonitoringStatus(BaseModel):
     state: MonitoringState
     poll_interval_seconds: float
     last_checked_at: datetime | None = None
+    last_fresh_poll_at: datetime | None = None
     last_successful_sync_at: datetime | None = None
     last_error_at: datetime | None = None
     last_error_summary: str | None = None
     consecutive_failure_count: int = 0
+    backfill_pending: bool = False
+    backfill_completed_at: datetime | None = None
+    backfill_state: BackfillState = "complete"
+    lease_state: LeaseState = "unclaimed"
+    retention_days: int
+    last_retention_at: datetime | None = None
 
 
 class MonitoringSyncResult(BaseModel):
