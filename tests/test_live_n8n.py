@@ -16,7 +16,10 @@ if not (
     and os.getenv("N8N_API_KEY")
 ):
     pytest.skip(
-        "set RUN_LIVE_N8N_VALIDATION=true, N8N_BASE_URL, and N8N_API_KEY to run live n8n validation",
+        (
+            "set RUN_LIVE_N8N_VALIDATION=true, N8N_BASE_URL, and N8N_API_KEY "
+            "to run live n8n validation"
+        ),
         allow_module_level=True,
     )
 
