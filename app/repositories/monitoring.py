@@ -11,6 +11,13 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def is_expired(value: datetime | None, now: datetime | None = None) -> bool:
+    if value is None:
+        return False
+    comparable = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return comparable < (now or utc_now())
+
+
 class MonitoringRepository:
     def __init__(self, session: Session):
         self.session = session
@@ -77,7 +84,7 @@ class MonitoringRepository:
             )
         )
         self.session.commit()
-        recovered = bool(previous_expiry is not None and previous_expiry < now)
+        recovered = is_expired(previous_expiry, now)
         return result.rowcount == 1, recovered
 
     def heartbeat_lease(self, source: str, source_identifier: str, owner_id: str, lease_seconds: float) -> bool:
