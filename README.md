@@ -109,6 +109,8 @@ tests/                 Offline backend and API tests
   recovers after a crash or expiry.
 - **Bounded retention:** execution history is deleted in configured batches after its retention
   window; incidents and checkpoints are never deleted by that cleanup.
+- **Safe operational logs:** concise events cover fresh polls, backfill, lease contention/recovery,
+  retries, and retention counts without recording API keys, credentials, or execution payloads.
 - **Bounded recovery:** timeouts, connectivity failures, rate limits, and n8n 5xx responses
   receive bounded exponential retries; authentication and configuration errors do not.
 - **Sanitized failure context:** the normalizer deliberately excludes execution `runData`, node
