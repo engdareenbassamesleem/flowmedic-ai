@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     execution_history_retention_days: int = Field(default=30, ge=1, le=3650)
     retention_cleanup_interval_seconds: float = Field(default=86400, ge=60, le=604800)
     retention_cleanup_batch_size: int = Field(default=500, ge=1, le=10000)
+    alert_default_cooldown_seconds: int = Field(default=300, ge=60, le=86400)
+    alert_max_retries: int = Field(default=3, ge=1, le=5)
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod

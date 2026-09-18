@@ -19,6 +19,7 @@ from app.integrations.n8n.client import N8nClient
 from app.models.incident import Base
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import ErrorResponse
+from app.services.alerts import AlertService
 from app.services.monitoring import MonitoringService
 
 
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
             engine, factory = create_database(config.database_url)
         app.state.session_factory = factory
         app.state.monitoring = None
+        app.state.alerts = AlertService(config, factory)
         try:
             async with (
                 httpx.AsyncClient(transport=n8n_transport, follow_redirects=False) as n8n_http,
@@ -65,7 +67,12 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
                         app.state.demo_incident_id = incident.id
                         seed_demo_history(session, incident.id)
                         session.commit()
-                app.state.monitoring = MonitoringService(config, factory, app.state.n8n)
+                app.state.monitoring = MonitoringService(
+                    config,
+                    factory,
+                    app.state.n8n,
+                    alerts=app.state.alerts,
+                )
                 await app.state.monitoring.start()
                 yield
         finally:

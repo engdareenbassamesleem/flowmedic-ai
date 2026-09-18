@@ -37,10 +37,11 @@ def execution_success(status: str | None) -> bool | None:
 class MonitoringService:
     """Read-only fresh polling with a bounded, durable historical backfill."""
 
-    def __init__(self, settings, session_factory, n8n):
+    def __init__(self, settings, session_factory, n8n, alerts=None):
         self.settings = settings
         self.session_factory = session_factory
         self.n8n = n8n
+        self.alerts = alerts
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._owner_id = str(uuid.uuid4())
@@ -89,13 +90,10 @@ class MonitoringService:
             )
             if checkpoint is None:
                 lease_state = "unclaimed"
-            elif (
-                checkpoint.lease_expires_at is not None
-                and not is_expired(checkpoint.lease_expires_at)
+            elif checkpoint.lease_expires_at is not None and not is_expired(
+                checkpoint.lease_expires_at
             ):
-                lease_state = (
-                    "active" if checkpoint.lease_owner_id == self._owner_id else "standby"
-                )
+                lease_state = "active" if checkpoint.lease_owner_id == self._owner_id else "standby"
             else:
                 lease_state = "unclaimed"
             return MonitoringStatus(
@@ -139,6 +137,7 @@ class MonitoringService:
             except ServiceError as exc:
                 self._record_failure(exc)
                 self._state = "degraded"
+                self._evaluate_alerts(monitoring_state="degraded")
                 logger.warning("monitoring_poll_failed code=%s", exc.code)
                 return MonitoringSyncResult(status="failed")
             except Exception:
@@ -146,11 +145,13 @@ class MonitoringService:
                     ServiceError("monitoring_error", "Monitoring poll failed", 503)
                 )
                 self._state = "degraded"
+                self._evaluate_alerts(monitoring_state="degraded")
                 logger.exception("monitoring_poll_failed code=monitoring_error")
                 return MonitoringSyncResult(status="failed")
             finally:
                 self._release_lease()
             self._state = "idle"
+            self._evaluate_alerts(monitoring_state="idle", workflow_health=True)
             if was_degraded:
                 logger.info("monitoring_recovered")
             logger.info(
@@ -180,9 +181,7 @@ class MonitoringService:
 
     def _release_lease(self) -> None:
         with self.session_factory() as session:
-            MonitoringRepository(session).release_lease(
-                SOURCE, SOURCE_IDENTIFIER, self._owner_id
-            )
+            MonitoringRepository(session).release_lease(SOURCE, SOURCE_IDENTIFIER, self._owner_id)
 
     async def _sync_with_retries(self) -> MonitoringSyncResult:
         for attempt in range(self.settings.monitor_max_retries + 1):
@@ -270,9 +269,7 @@ class MonitoringService:
                 checkpoint.backfill_cursor = page.nextCursor
                 checkpoint.backfill_completed_at = None if page.nextCursor else now
             checkpoint.last_execution_id = (
-                entries[-1].id
-                if entries
-                else checkpoint.last_execution_id
+                entries[-1].id if entries else checkpoint.last_execution_id
             )
             checkpoint.last_checked_at = now
             checkpoint.last_fresh_poll_at = now
@@ -310,6 +307,7 @@ class MonitoringService:
             incidents = IncidentRepository(session)
             created_history = 0
             created_incidents = 0
+            new_incidents: list[tuple[str, str]] = []
             secrets = self._secrets()
             for detail in entries:
                 record, inserted = history.create_once(
@@ -328,12 +326,40 @@ class MonitoringService:
                     incident, created = incidents.create_once(normalize(detail, secrets))
                     history.attach_incident(record, incident.id)
                     created_incidents += int(created)
+                    if created:
+                        new_incidents.append((incident.id, incident.workflow_id))
             session.commit()
+        for incident_id, workflow_id in new_incidents:
+            self._evaluate_alerts(
+                incident_id=incident_id,
+                workflow_id=workflow_id,
+            )
         if entries:
             logger.info("monitoring_executions_discovered count=%s", len(entries))
         else:
             logger.info("monitoring_no_new_data")
         return created_history, created_incidents
+
+    def _evaluate_alerts(
+        self,
+        *,
+        incident_id: str | None = None,
+        workflow_id: str | None = None,
+        monitoring_state: str | None = None,
+        workflow_health: bool = False,
+    ) -> None:
+        if self.alerts is None:
+            return
+        try:
+            if incident_id is not None and workflow_id is not None:
+                self.alerts.on_new_incident(incident_id, workflow_id)
+            if monitoring_state is not None:
+                self.alerts.evaluate_monitoring_state(monitoring_state)
+            if workflow_health:
+                self.alerts.evaluate_workflow_health()
+        except Exception:
+            # Alerting must never prevent read-only monitoring persistence.
+            logger.exception("alert_evaluation_failed")
 
     def _heartbeat_lease(self) -> None:
         with self.session_factory() as session:
@@ -351,16 +377,11 @@ class MonitoringService:
             checkpoints = MonitoringRepository(session)
             checkpoint = checkpoints.checkpoint(SOURCE, SOURCE_IDENTIFIER)
             now = utc_now()
-            if (
-                checkpoint.last_retention_at is not None
-                and now
-                - (
-                    checkpoint.last_retention_at.replace(tzinfo=UTC)
-                    if checkpoint.last_retention_at.tzinfo is None
-                    else checkpoint.last_retention_at.astimezone(UTC)
-                )
-                < timedelta(seconds=self.settings.retention_cleanup_interval_seconds)
-            ):
+            if checkpoint.last_retention_at is not None and now - (
+                checkpoint.last_retention_at.replace(tzinfo=UTC)
+                if checkpoint.last_retention_at.tzinfo is None
+                else checkpoint.last_retention_at.astimezone(UTC)
+            ) < timedelta(seconds=self.settings.retention_cleanup_interval_seconds):
                 return
             logger.info("retention_started")
             cutoff = now - timedelta(days=self.settings.execution_history_retention_days)

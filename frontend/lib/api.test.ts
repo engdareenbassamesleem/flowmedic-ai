@@ -33,4 +33,15 @@ describe("FlowMedic API client", () => {
       expect.anything(),
     );
   });
+
+  it("loads alert history through the typed dashboard client", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }),
+    );
+    await expect(api.alertEvents()).resolves.toEqual({ data: [] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/v1/alerts/events?limit=50&offset=0",
+      expect.anything(),
+    );
+  });
 });

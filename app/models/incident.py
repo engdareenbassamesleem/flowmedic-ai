@@ -68,3 +68,59 @@ class ExecutionHistory(Base):
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_success: Mapped[bool | None] = mapped_column()
     incident_id: Mapped[str | None] = mapped_column(ForeignKey("incidents.id"), index=True)
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    trigger_type: Mapped[str] = mapped_column(String(50), index=True)
+    enabled: Mapped[bool] = mapped_column(default=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    delivery_provider: Mapped[str] = mapped_column(String(50), default="mock")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AlertEvent(Base):
+    __tablename__ = "alert_events"
+    __table_args__ = (UniqueConstraint("event_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    rule_id: Mapped[str] = mapped_column(ForeignKey("alert_rules.id"), index=True)
+    trigger_type: Mapped[str] = mapped_column(String(50), index=True)
+    event_key: Mapped[str] = mapped_column(String(64), unique=True)
+    deduplication_key: Mapped[str] = mapped_column(String(255), index=True)
+    incident_id: Mapped[str | None] = mapped_column(ForeignKey("incidents.id"), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_error_summary: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AlertDeliveryAttempt(Base):
+    __tablename__ = "alert_delivery_attempts"
+    __table_args__ = (UniqueConstraint("alert_event_id", "attempt_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    alert_event_id: Mapped[str] = mapped_column(ForeignKey("alert_events.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    error_summary: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AlertConditionState(Base):
+    __tablename__ = "alert_condition_states"
+    __table_args__ = (UniqueConstraint("condition_type", "scope_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    condition_type: Mapped[str] = mapped_column(String(50), index=True)
+    scope_key: Mapped[str] = mapped_column(String(255))
+    current_state: Mapped[str] = mapped_column(String(50))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

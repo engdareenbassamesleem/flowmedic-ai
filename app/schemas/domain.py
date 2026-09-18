@@ -135,6 +135,79 @@ class OverviewMetrics(BaseModel):
     monitoring: MonitoringStatus
 
 
+AlertTriggerType = Literal[
+    "new_incident",
+    "workflow_unhealthy",
+    "monitoring_degraded",
+]
+AlertDeliveryStatus = Literal["pending", "delivered", "failed"]
+
+
+class AlertRuleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    trigger_type: AlertTriggerType
+    enabled: bool = False
+    cooldown_seconds: int | None = Field(default=None, ge=60, le=86400)
+    delivery_provider: Literal["mock"] = "mock"
+
+
+class AlertRuleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    enabled: bool | None = None
+    cooldown_seconds: int | None = Field(default=None, ge=60, le=86400)
+
+
+class AlertRuleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    trigger_type: AlertTriggerType
+    enabled: bool
+    cooldown_seconds: int
+    delivery_provider: Literal["mock"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlertRulePage(BaseModel):
+    data: list[AlertRuleOut]
+
+
+class AlertEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    rule_id: str
+    trigger_type: AlertTriggerType
+    deduplication_key: str
+    incident_id: str | None = None
+    workflow_id: str | None = None
+    status: AlertDeliveryStatus
+    cooldown_until: datetime
+    last_error_summary: str | None = None
+    created_at: datetime
+    delivered_at: datetime | None = None
+
+
+class AlertEventPage(BaseModel):
+    data: list[AlertEventOut]
+
+
+class AlertDeliveryAttemptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    alert_event_id: str
+    provider: Literal["mock"]
+    attempt_number: int
+    status: AlertDeliveryStatus
+    error_summary: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+
+
+class AlertDeliveryAttemptPage(BaseModel):
+    data: list[AlertDeliveryAttemptOut]
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
