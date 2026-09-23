@@ -36,6 +36,9 @@ and when—is scattered across workflow and execution data.
   provider or an OpenAI-compatible structured-output provider.
 - Provides a responsive Next.js dashboard for overview, workflows, incidents, incident
   detail, and safe configuration status.
+- Records deterministic alert-rule decisions for new incidents, unhealthy workflows, and
+  degraded monitoring. The included provider is local/mock only and is disabled until a rule is
+  explicitly enabled.
 
 FlowMedic is an investigation aid. It does not modify workflows, apply fixes, or claim that a
 diagnosis is certain.
@@ -58,8 +61,10 @@ flowchart TB
     lease --> normalize["Sanitize and normalize"]
     normalize --> storage[("SQLite history + incidents")]
     storage --> metrics["Deterministic retained-window metrics"]
+    metrics --> alerts["Alert rules + durable event log"]
     storage --> api["Typed FastAPI API"]
     metrics --> api
+    alerts --> api
     api --> dashboard["Next.js dashboard"]
     api --> provider["Mock or live diagnosis provider"]
 ```
@@ -123,6 +128,9 @@ tests/                 Offline backend and API tests
   probability; suggested fixes require review.
 - **Independent delivery checks:** CI runs Python checks on Python 3.12 and 3.13, frontend
   lint/typecheck/tests/build, and separate backend and dashboard Docker builds.
+- **Local-first alerting:** rules are disabled by default. Trigger state, cooldown windows,
+  event deduplication, and delivery attempts are persisted; the supplied mock provider records
+  delivery locally and never sends a message or webhook.
 
 ## Safety & reliability
 
@@ -137,6 +145,9 @@ tests/                 Offline backend and API tests
   workflow history for the dashboard.
 - Offline tests and CI use mocked n8n/AI HTTP interactions, so real credentials are not
   required. Optional live n8n validation is opt-in and never runs in CI.
+- Alert delivery is at-least-once from FlowMedic's perspective: durable event keys and attempt
+  records reduce duplicates, but exactly-once delivery cannot be guaranteed without cooperation
+  from a future external provider.
 
 ## Local development
 
@@ -191,6 +202,8 @@ backend address. It is browser-visible configuration and must not contain a toke
 | `EXECUTION_HISTORY_RETENTION_DAYS` | `30` | Retained execution-history window; incidents are not deleted |
 | `RETENTION_CLEANUP_INTERVAL_SECONDS` | `86400` | Minimum interval between retention cleanup attempts |
 | `RETENTION_CLEANUP_BATCH_SIZE` | `500` | Maximum history records deleted in one cleanup run |
+| `ALERT_DEFAULT_COOLDOWN_SECONDS` | `300` | Suggested cooldown when creating an alert rule; 60–86400 seconds |
+| `ALERT_MAX_RETRIES` | `3` | Maximum persisted attempts for one mock alert event |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only API base URL in `frontend/.env.local` |
 
 Without n8n credentials, local health and incident endpoints still work; n8n operations return
@@ -230,6 +243,9 @@ bearer authentication is disabled.
 | `GET` | `/api/v1/incidents` | List persisted incidents with offset pagination |
 | `GET` | `/api/v1/incidents/{incident_id}` | Read one incident |
 | `POST` | `/api/v1/incidents/{incident_id}/diagnose` | Generate and persist an advisory diagnosis |
+| `GET`, `POST`, `PATCH` | `/api/v1/alerts/rules` | View or explicitly configure local/mock alert rules |
+| `GET` | `/api/v1/alerts/events` | View persisted alert-event history |
+| `GET` | `/api/v1/alerts/events/{event_id}/deliveries` | View safe, persisted delivery attempts |
 | `GET` | `/api/v1/demo` | Synthetic demo metadata; available only with `DEMO_MODE=true` |
 
 `GET` endpoints do not ingest incidents. The monitoring `POST` is read-only toward n8n and
@@ -309,10 +325,11 @@ push and pull request.
 - Durable monitoring, checkpoints, retry/backoff, and execution history
 - Fresh-first polling, bounded backfill, SQLite ownership leasing, and retention
 - Deterministic workflow health and monitoring metrics
+- Local-first alert-rule, cooldown, deduplication, and durable delivery-attempt foundation
 
 **Next**
 
-- Alerting and notification delivery
+- Configured external alert providers and notification delivery
 - Deeper diagnosis evaluation
 - Audit history
 

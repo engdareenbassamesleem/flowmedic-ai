@@ -1,5 +1,7 @@
 import type {
   ApiErrorBody,
+  AlertEventPage,
+  AlertRulePage,
   HealthResponse,
   Incident,
   IncidentPage,
@@ -54,6 +56,9 @@ export const api = {
   systemStatus: () => request<SystemStatus>("/api/v1/system/status"),
   monitoringStatus: () => request<MonitoringStatus>("/api/v1/monitoring/status"),
   monitoringSync: () => request("/api/v1/monitoring/sync", { method: "POST" }),
+  alertRules: () => request<AlertRulePage>("/api/v1/alerts/rules"),
+  alertEvents: (limit = 50, offset = 0) =>
+    request<AlertEventPage>(`/api/v1/alerts/events?limit=${limit}&offset=${offset}`),
   overviewMetrics: () => request<OverviewMetrics>("/api/v1/metrics/overview"),
   workflowMetrics: () => request<WorkflowHealthPage>("/api/v1/metrics/workflows"),
   n8nStatus: () => request<N8nConnectionResponse>("/api/v1/n8n/status"),

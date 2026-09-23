@@ -112,3 +112,39 @@ export interface OverviewMetrics {
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
+
+export type AlertTriggerType = "new_incident" | "workflow_unhealthy" | "monitoring_degraded";
+export type AlertDeliveryStatus = "pending" | "delivered" | "failed";
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  trigger_type: AlertTriggerType;
+  enabled: boolean;
+  cooldown_seconds: number;
+  delivery_provider: "mock";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertEvent {
+  id: string;
+  rule_id: string;
+  trigger_type: AlertTriggerType;
+  deduplication_key: string;
+  incident_id: string | null;
+  workflow_id: string | null;
+  status: AlertDeliveryStatus;
+  cooldown_until: string;
+  last_error_summary: string | null;
+  created_at: string;
+  delivered_at: string | null;
+}
+
+export interface AlertRulePage {
+  data: AlertRule[];
+}
+
+export interface AlertEventPage {
+  data: AlertEvent[];
+}

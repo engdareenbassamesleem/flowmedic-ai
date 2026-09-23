@@ -81,7 +81,8 @@ class MonitoringRepository:
                 lease_heartbeat_at=now,
                 lease_expires_at=expiry,
                 updated_at=now,
-            )
+            ),
+            execution_options={"synchronize_session": False},
         )
         self.session.commit()
         recovered = is_expired(previous_expiry, now)
@@ -109,7 +110,8 @@ class MonitoringRepository:
                 lease_heartbeat_at=now,
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
                 updated_at=now,
-            )
+            ),
+            execution_options={"synchronize_session": False},
         )
         self.session.commit()
         return result.rowcount == 1
@@ -125,7 +127,8 @@ class MonitoringRepository:
                 MonitoringCheckpoint.id == checkpoint.id,
                 MonitoringCheckpoint.lease_owner_id == owner_id,
             )
-            .values(lease_owner_id=None, lease_expires_at=now, updated_at=now)
+            .values(lease_owner_id=None, lease_expires_at=now, updated_at=now),
+            execution_options={"synchronize_session": False},
         )
         self.session.commit()
 

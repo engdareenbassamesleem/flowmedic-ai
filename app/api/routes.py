@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -7,9 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ServiceError
 from app.core.security import sanitize
-from app.models.incident import ExecutionHistory, Incident
+from app.models.incident import AlertRule, ExecutionHistory, Incident
+from app.repositories.alerts import AlertEventRepository, AlertRuleRepository
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import (
+    AlertDeliveryAttemptPage,
+    AlertEventPage,
+    AlertRuleCreate,
+    AlertRuleOut,
+    AlertRulePage,
+    AlertRuleUpdate,
     DemoInfo,
     Failure,
     FailurePage,
@@ -29,6 +37,7 @@ from app.services.health import build_workflow_health, global_recent_counts
 from app.services.incidents import normalize
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=2048)]
 
@@ -151,11 +160,73 @@ async def sync_incidents(request: Request, session: DB, limit: Limit = 50, curso
     failures, next_cursor, scanned = await request.app.state.n8n.failed_executions(limit, cursor)
     repository = IncidentRepository(session)
     created = 0
+    created_incidents: list[tuple[str, str]] = []
     for item in failures:
-        _, inserted = repository.create_once(normalize(item, secrets(request)))
+        incident, inserted = repository.create_once(normalize(item, secrets(request)))
         created += int(inserted)
+        if inserted:
+            created_incidents.append((incident.id, incident.workflow_id))
     session.commit()
+    for incident_id, workflow_id in created_incidents:
+        try:
+            request.app.state.alerts.on_new_incident(incident_id, workflow_id)
+        except Exception:
+            # Alerts are advisory and must not undo or mask a committed incident sync.
+            logger.warning("alert_evaluation_failed source=manual_incident_sync")
     return SyncResult(scanned=scanned, created=created, next_cursor=next_cursor)
+
+
+@router.get("/alerts/rules", response_model=AlertRulePage)
+def alert_rules(session: DB) -> AlertRulePage:
+    return AlertRulePage(data=AlertRuleRepository(session).list_rules())
+
+
+@router.post("/alerts/rules", response_model=AlertRuleOut, status_code=201)
+def create_alert_rule(request: Request, payload: AlertRuleCreate, session: DB) -> AlertRuleOut:
+    existing = session.scalar(select(AlertRule).where(AlertRule.name == payload.name))
+    if existing is not None:
+        raise ServiceError("alert_rule_exists", "An alert rule with this name already exists", 409)
+    values = payload.model_dump()
+    if values["cooldown_seconds"] is None:
+        values["cooldown_seconds"] = request.app.state.settings.alert_default_cooldown_seconds
+    rule = AlertRuleRepository(session).create(**values)
+    session.commit()
+    return rule
+
+
+@router.patch("/alerts/rules/{rule_id}", response_model=AlertRuleOut)
+def update_alert_rule(rule_id: UUID, payload: AlertRuleUpdate, session: DB) -> AlertRuleOut:
+    repository = AlertRuleRepository(session)
+    rule = repository.get(str(rule_id))
+    if rule is None:
+        raise ServiceError("alert_rule_not_found", "Alert rule was not found", 404)
+    values = payload.model_dump(exclude_unset=True)
+    if "name" in values:
+        duplicate = session.scalar(select(AlertRule).where(AlertRule.name == values["name"]))
+        if duplicate is not None and duplicate.id != rule.id:
+            raise ServiceError(
+                "alert_rule_exists", "An alert rule with this name already exists", 409
+            )
+    repository.update(rule, **values)
+    session.commit()
+    return rule
+
+
+@router.get("/alerts/events", response_model=AlertEventPage)
+def alert_events(
+    session: DB,
+    limit: Limit = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AlertEventPage:
+    return AlertEventPage(data=AlertEventRepository(session).list_events(limit, offset))
+
+
+@router.get("/alerts/events/{event_id}/deliveries", response_model=AlertDeliveryAttemptPage)
+def alert_deliveries(event_id: UUID, session: DB) -> AlertDeliveryAttemptPage:
+    events = AlertEventRepository(session)
+    if events.get(str(event_id)) is None:
+        raise ServiceError("alert_event_not_found", "Alert event was not found", 404)
+    return AlertDeliveryAttemptPage(data=events.deliveries(str(event_id)))
 
 
 @router.get("/demo", response_model=DemoInfo)

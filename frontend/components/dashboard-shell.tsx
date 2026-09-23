@@ -11,6 +11,7 @@ const navigation = [
   { href: "/", label: "Overview", icon: GridIcon },
   { href: "/workflows", label: "Workflows", icon: WorkflowIcon },
   { href: "/incidents", label: "Incidents", icon: AlertIcon },
+  { href: "/alerts", label: "Alerts", icon: AlertIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
