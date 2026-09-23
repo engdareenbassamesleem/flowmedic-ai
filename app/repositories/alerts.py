@@ -112,9 +112,6 @@ class AlertEventRepository:
             )
         )
 
-    def attempt_count(self, event_id: str) -> int:
-        return len(self.deliveries(event_id))
-
     def attempt(self, attempt_id: str) -> AlertDeliveryAttempt | None:
         return self.session.get(AlertDeliveryAttempt, attempt_id)
 
@@ -123,6 +120,39 @@ class AlertEventRepository:
         self.session.add(attempt)
         self.session.flush()
         return attempt
+
+    def reserve_next_attempt(
+        self,
+        event_id: str,
+        provider: str,
+        max_attempts: int,
+        started_at: datetime,
+    ) -> AlertDeliveryAttempt | None:
+        """Reserve one unique attempt number, retrying only conflicting reservations."""
+        for _ in range(max_attempts):
+            event = self.get(event_id)
+            if event is None or event.status == "delivered":
+                return None
+            next_attempt = len(self.deliveries(event_id)) + 1
+            if next_attempt > max_attempts:
+                return None
+            try:
+                with self.session.begin_nested():
+                    attempt = self.create_attempt(
+                        alert_event_id=event.id,
+                        provider=provider,
+                        attempt_number=next_attempt,
+                        status="pending",
+                        error_summary=None,
+                        started_at=started_at,
+                        completed_at=None,
+                    )
+            except IntegrityError:
+                # Another process reserved this number first. Re-read durable state before retrying.
+                self.session.expire_all()
+                continue
+            return attempt
+        return None
 
 
 class AlertConditionStateRepository:

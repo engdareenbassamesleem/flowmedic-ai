@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -36,6 +37,7 @@ from app.services.health import build_workflow_health, global_recent_counts
 from app.services.incidents import normalize
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=2048)]
 
@@ -166,7 +168,11 @@ async def sync_incidents(request: Request, session: DB, limit: Limit = 50, curso
             created_incidents.append((incident.id, incident.workflow_id))
     session.commit()
     for incident_id, workflow_id in created_incidents:
-        request.app.state.alerts.on_new_incident(incident_id, workflow_id)
+        try:
+            request.app.state.alerts.on_new_incident(incident_id, workflow_id)
+        except Exception:
+            # Alerts are advisory and must not undo or mask a committed incident sync.
+            logger.warning("alert_evaluation_failed source=manual_incident_sync")
     return SyncResult(scanned=scanned, created=created, next_cursor=next_cursor)
 
 

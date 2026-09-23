@@ -1,10 +1,17 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
+from alembic.config import Config
 from sqlalchemy import inspect, select
 
+from alembic import command
+from app.api.routes import sync_incidents
 from app.core.config import Settings
 from app.core.database import create_database
 from app.core.migrations import upgrade_database
+from app.integrations.n8n.client import Execution
 from app.models.incident import AlertEvent, Base, ExecutionHistory, Incident
 from app.repositories.alerts import AlertEventRepository, AlertRuleRepository
 from app.services.alerts import (
@@ -138,6 +145,63 @@ def test_delivery_failure_uses_a_bounded_persisted_retry_budget(tmp_path):
     assert provider.calls == 2
 
 
+def test_conflicting_attempt_reservation_is_retried_without_duplicate_numbers(
+    tmp_path, monkeypatch
+):
+    service, factory = service_with_database(tmp_path)
+    rule_id = add_rule(factory, trigger_type=TRIGGER_NEW_INCIDENT)
+    now = datetime.now(UTC)
+    with factory() as session:
+        session.add(
+            AlertEvent(
+                id="reservation-event",
+                rule_id=rule_id,
+                trigger_type=TRIGGER_NEW_INCIDENT,
+                event_key="reservation-event-key",
+                deduplication_key="incident:reservation",
+                incident_id=None,
+                workflow_id="workflow-1",
+                status="pending",
+                cooldown_until=now + timedelta(minutes=5),
+                last_error_summary=None,
+                created_at=now,
+                delivered_at=None,
+            )
+        )
+        session.commit()
+
+    with factory() as session:
+        AlertEventRepository(session).create_attempt(
+            alert_event_id="reservation-event",
+            provider="mock",
+            attempt_number=1,
+            status="pending",
+            error_summary=None,
+            started_at=now,
+            completed_at=None,
+        )
+        session.commit()
+
+    original_deliveries = AlertEventRepository.deliveries
+    stale_read = True
+
+    def stale_deliveries(repository, event_id):
+        nonlocal stale_read
+        if event_id == "reservation-event" and stale_read:
+            stale_read = False
+            return []
+        return original_deliveries(repository, event_id)
+
+    monkeypatch.setattr(AlertEventRepository, "deliveries", stale_deliveries)
+    service.deliver("reservation-event")
+
+    with factory() as session:
+        attempts = AlertEventRepository(session).deliveries("reservation-event")
+        assert [attempt.attempt_number for attempt in attempts] == [1, 2]
+        assert len({attempt.attempt_number for attempt in attempts}) == 2
+        assert session.get(AlertEvent, "reservation-event").status == "delivered"
+
+
 def test_state_transition_rules_only_trigger_when_state_becomes_unhealthy_or_degraded(tmp_path):
     service, factory = service_with_database(tmp_path)
     add_rule(factory, trigger_type=TRIGGER_WORKFLOW_UNHEALTHY)
@@ -195,13 +259,108 @@ def test_alert_api_exposes_only_safe_rule_event_and_delivery_state(client):
     assert client.get("/api/v1/alerts/events").json() == {"data": []}
 
 
-def test_alerting_migration_adds_tables_without_replacing_existing_data(tmp_path):
+def test_manual_incident_sync_succeeds_when_alert_evaluation_fails(tmp_path):
+    class FailingAlerts:
+        def on_new_incident(self, incident_id, workflow_id):
+            raise RuntimeError("alert provider unavailable")
+
+    class FakeN8n:
+        async def failed_executions(self, limit, cursor):
+            return (
+                [
+                    Execution(
+                        id="failing-sync-execution",
+                        workflowId="workflow-1",
+                        status="error",
+                        workflowData={"name": "Manual sync workflow"},
+                        data={
+                            "resultData": {
+                                "error": {
+                                    "name": "TestError",
+                                    "message": "safe test failure",
+                                }
+                            }
+                        },
+                    )
+                ],
+                None,
+                1,
+            )
+
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'manual-sync.db'}",
+    )
+    engine, factory = create_database(settings.database_url)
+    Base.metadata.create_all(engine)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=settings,
+                n8n=FakeN8n(),
+                alerts=FailingAlerts(),
+            )
+        )
+    )
+    with factory() as session:
+        response = asyncio.run(sync_incidents(request, session))
+
+    assert response.created == 1
+    with factory() as session:
+        assert len(list(session.scalars(select(Incident)))) == 1
+
+
+def upgrade_to_revision(database_url, revision):
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, revision)
+
+
+def test_alerting_migration_preserves_pre_phase_four_incident_data(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'alerting.db'}"
+    upgrade_to_revision(database_url, "0002_monitoring_hardening")
+    engine, factory = create_database(database_url)
+    original = {
+        "id": "pre-phase-four-incident",
+        "execution_id": "pre-phase-four-execution",
+        "workflow_id": "pre-phase-four-workflow",
+        "workflow_name": "Pre Phase Four Workflow",
+        "failed_node": "Safe node",
+        "error_type": "PrePhaseFourError",
+        "error_message": "safe preserved error",
+        "status": "open",
+        "severity": "high",
+    }
+    with factory() as session:
+        session.add(
+            Incident(
+                **original,
+                execution_timestamp=datetime(2026, 9, 1, tzinfo=UTC),
+                diagnosis=None,
+                diagnosis_provider=None,
+            )
+        )
+        session.commit()
+
     upgrade_database(database_url)
-    tables = set(inspect(create_database(database_url)[0]).get_table_names())
+    tables = set(inspect(engine).get_table_names())
     assert {
         "alert_rules",
         "alert_events",
         "alert_delivery_attempts",
         "alert_condition_states",
     } <= tables
+    with factory() as session:
+        preserved = session.get(Incident, original["id"])
+        assert preserved is not None
+        assert {
+            "id": preserved.id,
+            "execution_id": preserved.execution_id,
+            "workflow_id": preserved.workflow_id,
+            "workflow_name": preserved.workflow_name,
+            "failed_node": preserved.failed_node,
+            "error_type": preserved.error_type,
+            "error_message": preserved.error_message,
+            "status": preserved.status,
+            "severity": preserved.severity,
+        } == original

@@ -158,26 +158,18 @@ class AlertService:
     def deliver(self, event_id: str) -> None:
         if not self.enabled:
             return
-        with self.session_factory() as session:
-            existing_attempts = AlertEventRepository(session).attempt_count(event_id)
-        for attempt_number in range(
-            existing_attempts + 1,
-            self.settings.alert_max_retries + 1,
-        ):
+        for _ in range(self.settings.alert_max_retries):
             with self.session_factory() as session:
                 events = AlertEventRepository(session)
-                event = events.get(event_id)
-                if event is None or event.status == "delivered":
-                    return
-                attempt = events.create_attempt(
-                    alert_event_id=event.id,
-                    provider=self.provider.name,
-                    attempt_number=attempt_number,
-                    status="pending",
-                    error_summary=None,
-                    started_at=utc_now(),
-                    completed_at=None,
+                attempt = events.reserve_next_attempt(
+                    event_id,
+                    self.provider.name,
+                    self.settings.alert_max_retries,
+                    utc_now(),
                 )
+                if attempt is None:
+                    return
+                event = events.get(event_id)
                 session.commit()
                 attempt_id = attempt.id
                 payload = DeliveryPayload(
@@ -201,7 +193,9 @@ class AlertService:
                     event.last_error_summary = "Alert delivery provider failed"
                     session.commit()
                 logger.warning(
-                    "alert_delivery_failed event_id=%s attempt=%s", event_id, attempt_number
+                    "alert_delivery_failed event_id=%s attempt=%s",
+                    event_id,
+                    attempt.attempt_number,
                 )
                 continue
             with self.session_factory() as session:
@@ -215,7 +209,11 @@ class AlertService:
                 event.delivered_at = attempt.completed_at
                 event.last_error_summary = None
                 session.commit()
-            logger.info("alert_delivery_completed event_id=%s attempt=%s", event_id, attempt_number)
+            logger.info(
+                "alert_delivery_completed event_id=%s attempt=%s",
+                event_id,
+                attempt.attempt_number,
+            )
             return
 
     @staticmethod
