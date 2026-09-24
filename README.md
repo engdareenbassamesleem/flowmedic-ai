@@ -128,9 +128,9 @@ tests/                 Offline backend and API tests
   probability; suggested fixes require review.
 - **Independent delivery checks:** CI runs Python checks on Python 3.12 and 3.13, frontend
   lint/typecheck/tests/build, and separate backend and dashboard Docker builds.
-- **Local-first alerting:** rules are disabled by default. Trigger state, cooldown windows,
-  event deduplication, and delivery attempts are persisted; the supplied mock provider records
-  delivery locally and never sends a message or webhook.
+- **Safe alert delivery:** rules are disabled by default. Trigger state, cooldown windows,
+  event deduplication, and delivery attempts are persisted. The mock provider remains local;
+  the optional HTTPS webhook provider sends only a minimal, signed event payload.
 
 ## Safety & reliability
 
@@ -147,7 +147,7 @@ tests/                 Offline backend and API tests
   required. Optional live n8n validation is opt-in and never runs in CI.
 - Alert delivery is at-least-once from FlowMedic's perspective: durable event keys and attempt
   records reduce duplicates, but exactly-once delivery cannot be guaranteed without cooperation
-  from a future external provider.
+  from an external provider.
 
 ## Local development
 
@@ -203,7 +203,10 @@ backend address. It is browser-visible configuration and must not contain a toke
 | `RETENTION_CLEANUP_INTERVAL_SECONDS` | `86400` | Minimum interval between retention cleanup attempts |
 | `RETENTION_CLEANUP_BATCH_SIZE` | `500` | Maximum history records deleted in one cleanup run |
 | `ALERT_DEFAULT_COOLDOWN_SECONDS` | `300` | Suggested cooldown when creating an alert rule; 60–86400 seconds |
-| `ALERT_MAX_RETRIES` | `3` | Maximum persisted attempts for one mock alert event |
+| `ALERT_MAX_RETRIES` | `3` | Maximum persisted attempts for one alert event |
+| `ALERT_WEBHOOK_URL` | unset | Enables the webhook provider only for a globally routable HTTPS IP endpoint; hostnames, local, private, reserved, and link-local destinations are rejected |
+| `ALERT_WEBHOOK_TIMEOUT_SECONDS` | `5` | Strict outbound webhook timeout; greater than 0 and at most 15 seconds |
+| `ALERT_WEBHOOK_SIGNING_SECRET` | empty | Optional HMAC-SHA256 signing secret; never persisted or returned by the API |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000` | Frontend-only API base URL in `frontend/.env.local` |
 
 Without n8n credentials, local health and incident endpoints still work; n8n operations return
@@ -243,7 +246,7 @@ bearer authentication is disabled.
 | `GET` | `/api/v1/incidents` | List persisted incidents with offset pagination |
 | `GET` | `/api/v1/incidents/{incident_id}` | Read one incident |
 | `POST` | `/api/v1/incidents/{incident_id}/diagnose` | Generate and persist an advisory diagnosis |
-| `GET`, `POST`, `PATCH` | `/api/v1/alerts/rules` | View or explicitly configure local/mock alert rules |
+| `GET`, `POST`, `PATCH` | `/api/v1/alerts/rules` | View or explicitly configure mock or configured-webhook alert rules |
 | `GET` | `/api/v1/alerts/events` | View persisted alert-event history |
 | `GET` | `/api/v1/alerts/events/{event_id}/deliveries` | View safe, persisted delivery attempts |
 | `GET` | `/api/v1/demo` | Synthetic demo metadata; available only with `DEMO_MODE=true` |
@@ -251,6 +254,45 @@ bearer authentication is disabled.
 `GET` endpoints do not ingest incidents. The monitoring `POST` is read-only toward n8n and
 uses the same idempotent service as the background loop. Error responses use the safe shape
 `{"error":{"code":"...","message":"..."}}`.
+
+### Webhook alert delivery
+
+The default `mock` provider records a local delivery attempt and never contacts an external
+service. Set `ALERT_WEBHOOK_URL` to enable the `webhook` provider, then explicitly create an
+enabled rule with `delivery_provider: "webhook"`. Rules selecting an unavailable webhook are
+rejected; webhook URLs and signing secrets never appear in API responses.
+
+Webhook delivery is intentionally conservative: only HTTPS URLs with a direct, globally
+routable IP address are accepted. Localhost, loopback, private, link-local, reserved, and DNS
+hostname destinations are rejected. Hostnames are fail-closed because the current HTTP client
+cannot pin a DNS resolution to its outbound connection; this avoids claiming protection against
+DNS rebinding that the architecture cannot guarantee. Redirects are never followed, the response
+body is not processed, and requests use the configured strict timeout.
+
+The JSON payload contains no raw incident context:
+
+```json
+{
+  "version": 1,
+  "event": {
+    "id": "event UUID",
+    "trigger_type": "new_incident",
+    "incident_id": "incident UUID or null",
+    "workflow_id": "workflow ID or null",
+    "created_at": "ISO-8601 timestamp"
+  },
+  "delivery": { "attempt": 1 }
+}
+```
+
+When `ALERT_WEBHOOK_SIGNING_SECRET` is set, FlowMedic adds `X-FlowMedic-Timestamp` and
+`X-FlowMedic-Signature`. The signature is `v1=<hex hmac-sha256>` over the UTF-8 bytes of
+`<timestamp>.<canonical JSON body>`. Receivers should reject stale timestamps and verify with a
+constant-time comparison.
+
+Only 2xx responses are delivered. Timeouts, network failures, HTTP 429, and 5xx responses consume
+the bounded retry budget; other 4xx responses fail immediately. Delivery is at-least-once from
+FlowMedic's perspective, so exactly-once receipt cannot be guaranteed without receiver support.
 
 ### Health rules
 

@@ -186,6 +186,12 @@ def create_alert_rule(request: Request, payload: AlertRuleCreate, session: DB) -
     existing = session.scalar(select(AlertRule).where(AlertRule.name == payload.name))
     if existing is not None:
         raise ServiceError("alert_rule_exists", "An alert rule with this name already exists", 409)
+    if not request.app.state.alerts.provider_available(payload.delivery_provider):
+        raise ServiceError(
+            "alert_provider_not_configured",
+            "The selected alert delivery provider is not configured",
+            422,
+        )
     values = payload.model_dump()
     if values["cooldown_seconds"] is None:
         values["cooldown_seconds"] = request.app.state.settings.alert_default_cooldown_seconds
@@ -195,7 +201,9 @@ def create_alert_rule(request: Request, payload: AlertRuleCreate, session: DB) -
 
 
 @router.patch("/alerts/rules/{rule_id}", response_model=AlertRuleOut)
-def update_alert_rule(rule_id: UUID, payload: AlertRuleUpdate, session: DB) -> AlertRuleOut:
+def update_alert_rule(
+    request: Request, rule_id: UUID, payload: AlertRuleUpdate, session: DB
+) -> AlertRuleOut:
     repository = AlertRuleRepository(session)
     rule = repository.get(str(rule_id))
     if rule is None:
@@ -207,6 +215,14 @@ def update_alert_rule(rule_id: UUID, payload: AlertRuleUpdate, session: DB) -> A
             raise ServiceError(
                 "alert_rule_exists", "An alert rule with this name already exists", 409
             )
+    if values.get("enabled") and not request.app.state.alerts.provider_available(
+        rule.delivery_provider
+    ):
+        raise ServiceError(
+            "alert_provider_not_configured",
+            "The selected alert delivery provider is not configured",
+            422,
+        )
     repository.update(rule, **values)
     session.commit()
     return rule

@@ -141,6 +141,7 @@ AlertTriggerType = Literal[
     "monitoring_degraded",
 ]
 AlertDeliveryStatus = Literal["pending", "delivered", "failed"]
+AlertDeliveryProviderName = Literal["mock", "webhook"]
 
 
 class AlertRuleCreate(BaseModel):
@@ -148,7 +149,7 @@ class AlertRuleCreate(BaseModel):
     trigger_type: AlertTriggerType
     enabled: bool = False
     cooldown_seconds: int | None = Field(default=None, ge=60, le=86400)
-    delivery_provider: Literal["mock"] = "mock"
+    delivery_provider: AlertDeliveryProviderName = "mock"
 
 
 class AlertRuleUpdate(BaseModel):
@@ -164,7 +165,7 @@ class AlertRuleOut(BaseModel):
     trigger_type: AlertTriggerType
     enabled: bool
     cooldown_seconds: int
-    delivery_provider: Literal["mock"]
+    delivery_provider: AlertDeliveryProviderName
     created_at: datetime
     updated_at: datetime
 
@@ -196,7 +197,7 @@ class AlertDeliveryAttemptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     alert_event_id: str
-    provider: Literal["mock"]
+    provider: AlertDeliveryProviderName
     attempt_number: int
     status: AlertDeliveryStatus
     error_summary: str | None = None

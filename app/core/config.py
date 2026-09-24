@@ -3,6 +3,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.integrations.webhook import WebhookConfigurationError, validate_webhook_url
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -27,6 +29,9 @@ class Settings(BaseSettings):
     retention_cleanup_batch_size: int = Field(default=500, ge=1, le=10000)
     alert_default_cooldown_seconds: int = Field(default=300, ge=60, le=86400)
     alert_max_retries: int = Field(default=3, ge=1, le=5)
+    alert_webhook_url: str | None = None
+    alert_webhook_timeout_seconds: float = Field(default=5, gt=0, le=15)
+    alert_webhook_signing_secret: SecretStr = SecretStr("")
 
     @field_validator("n8n_base_url", "ai_base_url")
     @classmethod
@@ -44,6 +49,16 @@ class Settings(BaseSettings):
         ):
             raise ValueError("Expected an HTTP(S) base URL without credentials, query or fragment")
         return value.rstrip("/")
+
+    @field_validator("alert_webhook_url")
+    @classmethod
+    def valid_webhook_url(cls, value):
+        if value is None or not value.strip():
+            return None
+        try:
+            return validate_webhook_url(value.strip())
+        except WebhookConfigurationError as exc:
+            raise ValueError(str(exc)) from exc
 
     @model_validator(mode="after")
     def key_requires_url(self):

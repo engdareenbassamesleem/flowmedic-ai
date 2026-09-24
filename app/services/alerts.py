@@ -1,8 +1,11 @@
 import hashlib
+import hmac
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from sqlalchemy import select
 
 from app.models.incident import ExecutionHistory, Incident
@@ -30,6 +33,17 @@ class DeliveryPayload:
     trigger_type: str
     incident_id: str | None
     workflow_id: str | None
+    event_created_at: datetime
+    attempt_number: int
+
+
+class AlertDeliveryError(Exception):
+    """A delivery failure that carries only a safe, retryable classification."""
+
+    def __init__(self, summary: str, *, retryable: bool):
+        super().__init__(summary)
+        self.summary = summary
+        self.retryable = retryable
 
 
 class AlertDeliveryProvider:
@@ -54,15 +68,96 @@ class MockAlertDeliveryProvider(AlertDeliveryProvider):
         )
 
 
+class WebhookAlertDeliveryProvider(AlertDeliveryProvider):
+    """HTTPS-only webhook adapter with a deliberately minimal event payload."""
+
+    name = "webhook"
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        timeout_seconds: float,
+        signing_secret: str = "",
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self.url = url
+        self.signing_secret = signing_secret
+        self.client = httpx.Client(
+            transport=transport,
+            timeout=timeout_seconds,
+            follow_redirects=False,
+        )
+
+    def deliver(self, payload: DeliveryPayload) -> None:
+        body = json.dumps(
+            {
+                "version": 1,
+                "event": {
+                    "id": payload.event_id,
+                    "trigger_type": payload.trigger_type,
+                    "incident_id": payload.incident_id,
+                    "workflow_id": payload.workflow_id,
+                    "created_at": payload.event_created_at.isoformat(),
+                },
+                "delivery": {"attempt": payload.attempt_number},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        timestamp = str(int(utc_now().timestamp()))
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "FlowMedic-Alert/1",
+            "X-FlowMedic-Timestamp": timestamp,
+        }
+        if self.signing_secret:
+            signed = f"{timestamp}.".encode() + body
+            signature = hmac.new(self.signing_secret.encode(), signed, hashlib.sha256).hexdigest()
+            headers["X-FlowMedic-Signature"] = f"v1={signature}"
+        try:
+            # Streaming avoids processing or retaining remote response bodies.
+            with self.client.stream("POST", self.url, content=body, headers=headers) as response:
+                status_code = response.status_code
+        except httpx.TimeoutException as exc:
+            raise AlertDeliveryError("Webhook request timed out", retryable=True) from exc
+        except httpx.RequestError as exc:
+            raise AlertDeliveryError("Webhook request failed", retryable=True) from exc
+        if 200 <= status_code < 300:
+            return
+        if status_code == 429 or 500 <= status_code < 600:
+            raise AlertDeliveryError("Webhook returned a retryable response", retryable=True)
+        raise AlertDeliveryError("Webhook returned a non-retryable response", retryable=False)
+
+    def close(self) -> None:
+        self.client.close()
+
+
 class AlertService:
-    def __init__(self, settings, session_factory, provider: AlertDeliveryProvider | None = None):
+    def __init__(
+        self,
+        settings,
+        session_factory,
+        provider: AlertDeliveryProvider | None = None,
+        *,
+        providers: dict[str, AlertDeliveryProvider] | None = None,
+    ):
         self.settings = settings
         self.session_factory = session_factory
-        self.provider = provider or MockAlertDeliveryProvider()
+        self.providers = providers or {"mock": provider or MockAlertDeliveryProvider()}
 
     @property
     def enabled(self) -> bool:
         return not self.settings.demo_mode
+
+    def provider_available(self, provider_name: str) -> bool:
+        return self.enabled and provider_name in self.providers
+
+    def close(self) -> None:
+        for provider in self.providers.values():
+            close = getattr(provider, "close", None)
+            if callable(close):
+                close()
 
     def on_new_incident(self, incident_id: str, workflow_id: str) -> int:
         return self._trigger(
@@ -161,15 +256,25 @@ class AlertService:
         for _ in range(self.settings.alert_max_retries):
             with self.session_factory() as session:
                 events = AlertEventRepository(session)
+                event = events.get(event_id)
+                if event is None:
+                    return
+                rule = AlertRuleRepository(session).get(event.rule_id)
+                provider = self.providers.get(rule.delivery_provider) if rule is not None else None
+                if provider is None:
+                    event.status = "failed"
+                    event.last_error_summary = "Alert delivery provider is not configured"
+                    session.commit()
+                    logger.warning("alert_provider_unavailable event_id=%s", event_id)
+                    return
                 attempt = events.reserve_next_attempt(
                     event_id,
-                    self.provider.name,
+                    provider.name,
                     self.settings.alert_max_retries,
                     utc_now(),
                 )
                 if attempt is None:
                     return
-                event = events.get(event_id)
                 session.commit()
                 attempt_id = attempt.id
                 payload = DeliveryPayload(
@@ -177,9 +282,31 @@ class AlertService:
                     trigger_type=event.trigger_type,
                     incident_id=event.incident_id,
                     workflow_id=event.workflow_id,
+                    event_created_at=event.created_at,
+                    attempt_number=attempt.attempt_number,
                 )
             try:
-                self.provider.deliver(payload)
+                provider.deliver(payload)
+            except AlertDeliveryError as exc:
+                with self.session_factory() as session:
+                    event = AlertEventRepository(session).get(event_id)
+                    attempt = AlertEventRepository(session).attempt(attempt_id)
+                    if event is None or attempt is None:
+                        return
+                    attempt.status = "failed"
+                    attempt.error_summary = exc.summary
+                    attempt.completed_at = utc_now()
+                    event.status = "failed"
+                    event.last_error_summary = exc.summary
+                    session.commit()
+                logger.warning(
+                    "alert_delivery_failed event_id=%s attempt=%s",
+                    event_id,
+                    attempt.attempt_number,
+                )
+                if not exc.retryable:
+                    return
+                continue
             except Exception:
                 with self.session_factory() as session:
                     event = AlertEventRepository(session).get(event_id)

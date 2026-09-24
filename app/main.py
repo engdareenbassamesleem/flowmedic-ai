@@ -19,7 +19,11 @@ from app.integrations.n8n.client import N8nClient
 from app.models.incident import Base
 from app.repositories.incidents import IncidentRepository
 from app.schemas.domain import ErrorResponse
-from app.services.alerts import AlertService
+from app.services.alerts import (
+    AlertService,
+    MockAlertDeliveryProvider,
+    WebhookAlertDeliveryProvider,
+)
 from app.services.monitoring import MonitoringService
 
 
@@ -27,7 +31,13 @@ def error_response(code, message, status_code):
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status_code)
 
 
-def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_transport=None):
+def create_app(
+    settings: Settings | None = None,
+    *,
+    n8n_transport=None,
+    ai_transport=None,
+    webhook_transport=None,
+):
     config = settings or Settings()
 
     @asynccontextmanager
@@ -41,7 +51,15 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
             engine, factory = create_database(config.database_url)
         app.state.session_factory = factory
         app.state.monitoring = None
-        app.state.alerts = AlertService(config, factory)
+        providers = {"mock": MockAlertDeliveryProvider()}
+        if config.alert_webhook_url and not config.demo_mode:
+            providers["webhook"] = WebhookAlertDeliveryProvider(
+                config.alert_webhook_url,
+                timeout_seconds=config.alert_webhook_timeout_seconds,
+                signing_secret=config.alert_webhook_signing_secret.get_secret_value(),
+                transport=webhook_transport,
+            )
+        app.state.alerts = AlertService(config, factory, providers=providers)
         try:
             async with (
                 httpx.AsyncClient(transport=n8n_transport, follow_redirects=False) as n8n_http,
@@ -78,6 +96,7 @@ def create_app(settings: Settings | None = None, *, n8n_transport=None, ai_trans
         finally:
             if app.state.monitoring is not None:
                 await app.state.monitoring.stop()
+            app.state.alerts.close()
             engine.dispose()
 
     app = FastAPI(title="FlowMedic AI", version="0.1.0", lifespan=lifespan)
