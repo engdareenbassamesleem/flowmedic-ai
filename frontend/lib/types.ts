@@ -115,6 +115,7 @@ export interface ApiErrorBody {
 
 export type AlertTriggerType = "new_incident" | "workflow_unhealthy" | "monitoring_degraded";
 export type AlertDeliveryStatus = "pending" | "delivered" | "failed";
+export type AlertDeliveryProvider = "mock" | "webhook";
 
 export interface AlertRule {
   id: string;
@@ -122,7 +123,7 @@ export interface AlertRule {
   trigger_type: AlertTriggerType;
   enabled: boolean;
   cooldown_seconds: number;
-  delivery_provider: "mock";
+  delivery_provider: AlertDeliveryProvider;
   created_at: string;
   updated_at: string;
 }
