@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     flowmedic_api_key: SecretStr = SecretStr("")
     demo_mode: bool = False
+    public_demo_readonly: bool = False
     cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     monitor_poll_interval_seconds: float = Field(default=60, ge=10, le=3600)
     monitor_page_size: int = Field(default=50, ge=1, le=100)
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
     def key_requires_url(self):
         if self.n8n_api_key.get_secret_value() and not self.n8n_base_url:
             raise ValueError("N8N_BASE_URL is required when N8N_API_KEY is set")
+        if self.public_demo_readonly and not self.demo_mode:
+            raise ValueError("PUBLIC_DEMO_READONLY requires DEMO_MODE=true")
         if self.demo_mode and (
             self.n8n_api_key.get_secret_value() or self.ai_api_key.get_secret_value()
         ):
