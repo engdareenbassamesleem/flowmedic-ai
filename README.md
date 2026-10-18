@@ -43,6 +43,10 @@ and when—is scattered across workflow and execution data.
 FlowMedic is an investigation aid. It does not modify workflows, apply fixes, or claim that a
 diagnosis is certain.
 
+## Public demo deployment
+
+For a shareable, **synthetic read-only** portfolio preview, see [deployment guide](docs/public-demo-deployment.md). This provisions a Render demo API and a Vercel dashboard through your own accounts; **no live demo URL is claimed until both sites have been deployed and verified**. Never configure real n8n or AI credentials in this public demo.
+
 ## Product preview
 
 The dashboard is available locally at `http://127.0.0.1:3000` after setup. No screenshots are
