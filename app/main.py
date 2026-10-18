@@ -112,6 +112,15 @@ def create_app(
     )
 
     @app.middleware("http")
+    async def readonly_public_demo(request: Request, call_next):
+        # Visitors can browse synthetic data but cannot mutate demo state.
+        if config.public_demo_readonly and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            return error_response(
+                "demo_readonly", "Public demo is read-only", 403
+            )
+        return await call_next(request)
+
+    @app.middleware("http")
     async def authentication(request: Request, call_next):
         key = config.flowmedic_api_key.get_secret_value()
         if key and request.url.path != "/health":
