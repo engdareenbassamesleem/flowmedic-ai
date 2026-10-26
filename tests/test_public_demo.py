@@ -1,6 +1,6 @@
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-import pytest
 
 from app.core.config import Settings
 from app.main import create_app
