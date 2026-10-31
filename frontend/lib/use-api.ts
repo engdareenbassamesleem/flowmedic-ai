@@ -12,9 +12,14 @@ export interface QueryState<T> {
 }
 
 export function useApi<T>(load: () => Promise<T>, key = "initial"): QueryState<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<{
+    key: string;
+    data: T | null;
+    error: ApiError | null;
+    loading: boolean;
+  }>({ key, data: null, error: null, loading: true });
+  const sequence = useRef(0);
+  const mounted = useRef(false);
 
   const loadRef = useRef(load);
   useEffect(() => {
@@ -22,24 +27,41 @@ export function useApi<T>(load: () => Promise<T>, key = "initial"): QueryState<T
   }, [load]);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    if (!mounted.current) return;
+    const requestId = ++sequence.current;
+    setState({ key, data: null, error: null, loading: true });
     try {
-      setData(await loadRef.current());
+      const data = await loadRef.current();
+      if (mounted.current && requestId === sequence.current) {
+        setState({ key, data, error: null, loading: false });
+      }
     } catch (reason) {
-      setError(
-        reason instanceof ApiError
-          ? reason
-          : new ApiError("The dashboard could not load this data.", 0),
-      );
-    } finally {
-      setLoading(false);
+      if (mounted.current && requestId === sequence.current) {
+        setState({
+          key,
+          data: null,
+          loading: false,
+          error: reason instanceof ApiError
+            ? reason
+            : new ApiError("The dashboard could not load this data.", 0),
+        });
+      }
     }
-  }, []);
+  }, [key]);
 
   useEffect(() => {
-    void Promise.resolve().then(refresh);
-  }, [key, refresh]);
+    mounted.current = true;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) return refresh();
+    });
+    return () => {
+      active = false;
+      mounted.current = false;
+      sequence.current += 1;
+    };
+  }, [refresh]);
 
-  return { data, error, loading, refresh };
+  if (state.key !== key) return { data: null, error: null, loading: true, refresh };
+  return { data: state.data, error: state.error, loading: state.loading, refresh };
 }

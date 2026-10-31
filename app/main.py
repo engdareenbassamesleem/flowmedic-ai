@@ -101,15 +101,6 @@ def create_app(
 
     app = FastAPI(title="FlowMedic AI", version="0.1.0", lifespan=lifespan)
     app.state.settings = config
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            origin.strip() for origin in config.cors_allow_origins.split(",") if origin.strip()
-        ],
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
 
     @app.middleware("http")
     async def readonly_public_demo(request: Request, call_next):
@@ -162,6 +153,16 @@ def create_app(
         responses={
             status: {"model": ErrorResponse} for status in (401, 404, 422, 500, 502, 503, 504)
         },
+    )
+    # Handle browser preflight before bearer checks and add CORS to safe errors.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            origin.strip() for origin in config.cors_allow_origins.split(",") if origin.strip()
+        ],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
     return app
 

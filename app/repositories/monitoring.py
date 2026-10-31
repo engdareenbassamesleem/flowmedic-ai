@@ -145,6 +145,15 @@ class ExecutionHistoryRepository:
             )
         )
         if existing is not None:
+            # Polls can observe running/waiting executions before their final result.
+            # Never regress a terminal result when a stale response arrives later.
+            terminal = {"success", "error", "crashed", "canceled"}
+            if existing.execution_status not in terminal:
+                for field in ("execution_status", "is_success", "stopped_at", "started_at"):
+                    if values.get(field) is not None:
+                        setattr(existing, field, values[field])
+            if values.get("workflow_name") != "Unknown workflow":
+                existing.workflow_name = values["workflow_name"]
             return existing, False
         history = ExecutionHistory(**values)
         try:
