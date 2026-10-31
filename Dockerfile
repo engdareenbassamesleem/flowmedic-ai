@@ -3,6 +3,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /service
 COPY pyproject.toml ./
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 RUN pip install --no-cache-dir . && useradd --uid 10001 --create-home flowmedic \
     && mkdir /data && chown flowmedic:flowmedic /data
 USER flowmedic

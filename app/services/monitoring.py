@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 from app.core.errors import ServiceError
+from app.core.security import sanitize
 from app.integrations.n8n.client import Execution, ExecutionPage, is_failed
 from app.repositories.incidents import IncidentRepository
 from app.repositories.monitoring import ExecutionHistoryRepository, MonitoringRepository, is_expired
@@ -313,7 +314,7 @@ class MonitoringService:
                 record, inserted = history.create_once(
                     source=SOURCE,
                     workflow_id=detail.workflowId,
-                    workflow_name=self._workflow_name(detail),
+                    workflow_name=sanitize(self._workflow_name(detail), secrets),
                     execution_id=detail.id,
                     execution_status=detail.status,
                     recorded_at=utc_now(),

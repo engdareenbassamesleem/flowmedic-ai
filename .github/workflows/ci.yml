@@ -35,6 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t flowmedic-ai:ci .
+      - name: Verify backend image startup and migrations
+        run: |
+          docker run -d --name flowmedic-smoke -p 127.0.0.1:8000:8000 flowmedic-ai:ci
+          trap 'docker logs flowmedic-smoke; docker rm -f flowmedic-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail http://127.0.0.1:8000/health; then exit 0; fi
+            sleep 1
+          done
+          exit 1
       - run: docker build -t flowmedic-dashboard:ci ./frontend
   frontend:
     runs-on: ubuntu-latest
